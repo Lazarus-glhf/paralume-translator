@@ -266,10 +266,11 @@ repository access.
 
 Before any release scripts, dependency installation, packaging, or release
 creation, the workflow checks out the immutable `GITHUB_SHA` without persisting
-checkout credentials, fetches only `refs/heads/main` from `origin` at depth 1,
-and requires the release commit to equal the fetched `origin/main` HEAD. This
-exact HEAD policy applies to both matching tag pushes and manual dispatches
-from `main`; manual tag creation targets the already validated commit output.
+checkout credentials, reads `refs/heads/main` through the authenticated GitHub
+API using the read-only job token, and requires the release commit to equal that
+remote `main` HEAD. This exact HEAD policy applies to both matching tag pushes
+and manual dispatches from `main`; manual tag creation targets the already
+validated commit output.
 
 The final release job targets the GitHub Environment named `prerelease`.
 Repository owners should create that environment and configure required

@@ -43,12 +43,15 @@ jobs:
         id: trusted-main
         shell: bash
         env:
-          TRUSTED_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git remote set-url origin "$TRUSTED_REPOSITORY_URL"
-          git fetch --no-tags --depth=1 --no-write-fetch-head origin \
-            '+refs/heads/main:refs/remotes/origin/main'
-          trusted_main_sha="$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')"
+          trusted_main_sha="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+            --jq '.object.sha')"
+          if [[ ! "$trusted_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GitHub returned an invalid main HEAD commit SHA." >&2
+            exit 1
+          fi
           if [[ "$GITHUB_SHA" != "$trusted_main_sha" ]]; then
             echo "Release commit $GITHUB_SHA is not origin/main HEAD $trusted_main_sha." >&2
             exit 1
