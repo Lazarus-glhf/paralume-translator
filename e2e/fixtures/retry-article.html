@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Paralume retry fixture</title>
+    <style>
+      body {
+        max-width: 46rem;
+        margin: 2rem auto;
+        color: #203028;
+        background: #fff;
+        font-family: system-ui, sans-serif;
+      }
+
+      p {
+        margin: 13px 0;
+      }
+    </style>
+  </head>
+  <body data-page-owned="retry-fixture">
+    <main>
+      <p id="automatic-source" style="color: rgb(20, 30, 40)">
+        [[PARALUME_MOCK_TRANSIENT:2:SERVER_UNAVAILABLE]] Automatic retry fixture
+        text.
+      </p>
+      <button id="page-button" type="button">Page-owned button</button>
+    </main>
+    <script>
+      window.retryFixtureClicks = 0;
+      document.querySelector("#page-button").addEventListener("click", () => {
+        window.retryFixtureClicks += 1;
+      });
+    </script>
+  </body>
+</html>

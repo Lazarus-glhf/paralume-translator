@@ -1,9 +1,18 @@
-import { createBackgroundTranslationMessage } from "../messaging/protocol";
+import {
+  createBackgroundCancelTranslationMessage,
+  createBackgroundTranslationMessage,
+} from "../messaging/protocol";
+import {
+  createGetContentSettingsMessage,
+  parseContentSettingsResponse,
+} from "../messaging/settings-protocol";
+import { parseCancelTranslationResponse } from "../messaging/validation";
+import { UserFacingError } from "../shared/errors";
 import type { TranslationRequest } from "../shared/types";
 import { createContentController, type ContentController } from "./controller";
 import { createContentRuntimeState, type ContentRuntimeState } from "./state";
 
-const CONTENT_RUNTIME_KEY = "__PARALUME_CONTENT_RUNTIME_V1__";
+const CONTENT_RUNTIME_KEY = "__PARALUME_CONTENT_RUNTIME_V2__";
 
 export interface ContentRuntime {
   onMessage: {
@@ -16,10 +25,11 @@ export interface ContentRuntimeDependencies {
   document: Document;
   globalObject: Record<string, unknown>;
   runtime: ContentRuntime;
+  getBrowserUiLanguage?: () => string | undefined;
 }
 
 interface InstalledContentRuntime {
-  readonly version: 1;
+  readonly version: 2;
   readonly controller: ContentController;
   readonly state: ContentRuntimeState;
 }
@@ -31,7 +41,7 @@ function isInstalledContentRuntime(
     typeof value === "object" &&
     value !== null &&
     "version" in value &&
-    value.version === 1 &&
+    value.version === 2 &&
     "controller" in value &&
     "state" in value
   );
@@ -50,18 +60,48 @@ export function installContentRuntime(
   const controller = createContentController({
     document: dependencies.document,
     state,
-    requestTranslations(request: TranslationRequest) {
+    requestTranslations(request: TranslationRequest, operationId: string) {
       return dependencies.runtime.sendMessage(
-        createBackgroundTranslationMessage(request),
+        createBackgroundTranslationMessage(request, operationId),
       );
     },
+    async cancelTranslation(operationId: string) {
+      const parsed = parseCancelTranslationResponse(
+        await dependencies.runtime.sendMessage(
+          createBackgroundCancelTranslationMessage(operationId),
+        ),
+      );
+      if (!parsed.ok) {
+        throw new UserFacingError(parsed.error.code);
+      }
+      if (!parsed.value.ok) {
+        throw new UserFacingError(parsed.value.error.code);
+      }
+    },
+    async loadContentSettings() {
+      const parsed = parseContentSettingsResponse(
+        await dependencies.runtime.sendMessage(
+          createGetContentSettingsMessage(),
+        ),
+      );
+      if (!parsed.ok) {
+        throw new UserFacingError(parsed.error.code);
+      }
+      if (!parsed.value.ok) {
+        throw new UserFacingError(parsed.value.error.code);
+      }
+      return parsed.value.contentSettings;
+    },
+    ...(dependencies.getBrowserUiLanguage === undefined
+      ? {}
+      : { browserUiLanguage: dependencies.getBrowserUiLanguage }),
   });
 
   dependencies.runtime.onMessage.addListener((message) =>
     controller.handleMessage(message),
   );
   dependencies.globalObject[CONTENT_RUNTIME_KEY] = {
-    version: 1,
+    version: 2,
     controller,
     state,
   } satisfies InstalledContentRuntime;

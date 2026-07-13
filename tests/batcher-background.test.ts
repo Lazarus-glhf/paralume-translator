@@ -2,13 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createBackgroundMessageHandler } from "../src/messaging/background-handler";
 import { registerBackgroundMessageListener } from "../src/messaging/background-listener";
-import { createBackgroundTranslationMessage } from "../src/messaging/protocol";
+import {
+  createBackgroundCancelTranslationMessage,
+  createBackgroundTranslationMessage,
+} from "../src/messaging/protocol";
+import { UserFacingError } from "../src/shared/errors";
 import type {
   TranslationRequest,
   TranslationResult,
 } from "../src/shared/types";
 import { translateInBatches } from "../src/translation/batcher";
 import type { TranslationProvider } from "../src/translation/provider";
+
+const operationIds = {
+  primary: "6e875c5c-03fe-4be5-b36f-b7055c0d5df6",
+  secondary: "fb156b91-71bb-4e51-b19e-b31b9ef8e8e9",
+  unknown: "523ce6a6-415c-4cec-8d76-a220fc3b1d97",
+} as const;
+
+const senderA = { tab: { id: 11 }, frameId: 0, documentId: "document-a" };
+const senderB = { tab: { id: 12 }, frameId: 0, documentId: "document-b" };
 
 function makeRequest(texts: readonly string[]): TranslationRequest {
   return {
@@ -27,6 +40,10 @@ function successResults(request: TranslationRequest): TranslationResult[] {
     status: "success",
     translatedText: `Translated: ${segment.text}`,
   }));
+}
+
+function operationIdFor(index: number): string {
+  return `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
 }
 
 describe("translateInBatches", () => {
@@ -125,6 +142,56 @@ describe("translateInBatches", () => {
     expect(results.map((result) => result.status)).toEqual([
       "success",
       "failure",
+    ]);
+  });
+
+  it("propagates request-wide provider failures instead of manufacturing segment failures", async () => {
+    const provider: TranslationProvider = {
+      name: "global-failure",
+      translate: () =>
+        Promise.reject(new UserFacingError("AUTHENTICATION_FAILED")),
+    };
+
+    await expect(
+      translateInBatches(
+        provider,
+        makeRequest(["First readable segment", "Second readable segment"]),
+      ),
+    ).rejects.toMatchObject({ code: "AUTHENTICATION_FAILED" });
+  });
+
+  it("maps only exhausted approved recoverable failures to segment results for manual retry", async () => {
+    const provider: TranslationProvider = {
+      name: "recoverable-exhaustion",
+      translate: () => Promise.reject(new UserFacingError("NETWORK_ERROR")),
+    };
+
+    await expect(
+      translateInBatches(
+        provider,
+        makeRequest(["First readable segment", "Second readable segment"]),
+      ),
+    ).resolves.toEqual([
+      {
+        id: "segment-1",
+        status: "failure",
+        error: {
+          code: "NETWORK_ERROR",
+          message:
+            "The provider could not be reached. Check the network and endpoint settings.",
+          retryable: true,
+        },
+      },
+      {
+        id: "segment-2",
+        status: "failure",
+        error: {
+          code: "NETWORK_ERROR",
+          message:
+            "The provider could not be reached. Check the network and endpoint settings.",
+          retryable: true,
+        },
+      },
     ]);
   });
 
@@ -243,7 +310,9 @@ describe("background translation message handling", () => {
     const request = makeRequest(["Readable background segment"]);
 
     await expect(
-      handleMessage(createBackgroundTranslationMessage(request)),
+      handleMessage(
+        createBackgroundTranslationMessage(request, operationIds.primary),
+      ),
     ).resolves.toEqual({
       protocolVersion: 1,
       ok: true,
@@ -280,7 +349,12 @@ describe("background translation message handling", () => {
       );
 
       await expect(
-        handleMessage(createBackgroundTranslationMessage(makeRequest(texts))),
+        handleMessage(
+          createBackgroundTranslationMessage(
+            makeRequest(texts),
+            operationIds.primary,
+          ),
+        ),
       ).resolves.toMatchObject({
         ok: false,
         error: { code: "REQUEST_LIMIT_EXCEEDED", retryable: false },
@@ -288,6 +362,393 @@ describe("background translation message handling", () => {
       expect(translate).not.toHaveBeenCalled();
     },
   );
+
+  it("deduplicates an identical active operation without another provider call", async () => {
+    let resolveProvider: ((results: TranslationResult[]) => void) | undefined;
+    const translate = vi.fn(
+      () =>
+        new Promise<TranslationResult[]>((resolve) => {
+          resolveProvider = resolve;
+        }),
+    );
+    const handleMessage = createBackgroundMessageHandler({
+      name: "deduplicated",
+      translate,
+    });
+    const request = makeRequest(["Readable deduplication segment"]);
+    const message = createBackgroundTranslationMessage(
+      request,
+      operationIds.primary,
+    );
+
+    const first = handleMessage(message, { sender: senderA });
+    const second = handleMessage(message, { sender: senderA });
+    expect(translate).toHaveBeenCalledOnce();
+
+    resolveProvider?.(successResults(request));
+    await expect(first).resolves.toMatchObject({ ok: true });
+    await expect(second).resolves.toMatchObject({ ok: true });
+  });
+
+  it("rejects active operation ID collisions and scopes cancellation to the sender", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const translate = vi.fn(
+      (_request: TranslationRequest, context?: { signal?: AbortSignal }) =>
+        new Promise<readonly TranslationResult[]>((_resolve, reject) => {
+          observedSignal = context?.signal;
+          context?.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const handleMessage = createBackgroundMessageHandler({
+      name: "scoped-cancellation",
+      translate,
+    });
+    const request = makeRequest(["Readable cancellable segment"]);
+    const active = handleMessage(
+      createBackgroundTranslationMessage(request, operationIds.primary),
+      { sender: senderA },
+    );
+
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(
+          makeRequest(["Different text under the same operation ID"]),
+          operationIds.primary,
+        ),
+        { sender: senderA },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "INVALID_MESSAGE" },
+    });
+    await expect(
+      handleMessage(
+        createBackgroundCancelTranslationMessage(operationIds.primary),
+        { sender: senderB },
+      ),
+    ).resolves.toEqual({
+      protocolVersion: 1,
+      ok: true,
+      cancelled: false,
+    });
+    expect(observedSignal?.aborted).toBe(false);
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(request, operationIds.primary),
+        { sender: senderB },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TRANSLATION_CANCELLED" },
+    });
+    expect(translate).toHaveBeenCalledOnce();
+
+    await expect(
+      handleMessage(
+        createBackgroundCancelTranslationMessage(operationIds.primary),
+        { sender: senderA },
+      ),
+    ).resolves.toEqual({
+      protocolVersion: 1,
+      ok: true,
+      cancelled: true,
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(active).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TRANSLATION_CANCELLED" },
+    });
+  });
+
+  it("allows the same operation UUID concurrently for different senders", async () => {
+    const signals: AbortSignal[] = [];
+    let resolveSecond:
+      ((results: readonly TranslationResult[]) => void) | undefined;
+    const translate = vi.fn(
+      (request: TranslationRequest, context?: { signal?: AbortSignal }) =>
+        new Promise<readonly TranslationResult[]>((resolve, reject) => {
+          const signal = context?.signal;
+          if (signal === undefined) {
+            reject(new Error("Expected an operation abort signal."));
+            return;
+          }
+          signals.push(signal);
+          if (signals.length === 2) {
+            resolveSecond = resolve;
+          }
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const handleMessage = createBackgroundMessageHandler({
+      name: "cross-sender-operation-id",
+      translate,
+    });
+    const requestA = makeRequest(["Sender A request"]);
+    const requestB = makeRequest(["Sender B request"]);
+
+    const pendingA = handleMessage(
+      createBackgroundTranslationMessage(requestA, operationIds.primary),
+      { sender: senderA },
+    );
+    const pendingB = handleMessage(
+      createBackgroundTranslationMessage(requestB, operationIds.primary),
+      { sender: senderB },
+    );
+
+    expect(translate).toHaveBeenCalledTimes(2);
+    await handleMessage(
+      createBackgroundCancelTranslationMessage(operationIds.primary),
+      { sender: senderA },
+    );
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+
+    resolveSecond?.(successResults(requestB));
+    await expect(pendingA).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TRANSLATION_CANCELLED" },
+    });
+    await expect(pendingB).resolves.toMatchObject({ ok: true });
+  });
+
+  it("returns a safe idempotent response for unknown cancel IDs and cleans completed operations", async () => {
+    const request = makeRequest(["Readable cleanup segment"]);
+    const translate = vi.fn((nextRequest: TranslationRequest) =>
+      Promise.resolve(successResults(nextRequest)),
+    );
+    const handleMessage = createBackgroundMessageHandler({
+      name: "operation-cleanup",
+      translate,
+    });
+
+    await expect(
+      handleMessage(
+        createBackgroundCancelTranslationMessage(operationIds.unknown),
+        { sender: senderA },
+      ),
+    ).resolves.toEqual({
+      protocolVersion: 1,
+      ok: true,
+      cancelled: false,
+    });
+    await handleMessage(
+      createBackgroundTranslationMessage(request, operationIds.secondary),
+      { sender: senderA },
+    );
+    await handleMessage(
+      createBackgroundTranslationMessage(request, operationIds.secondary),
+      { sender: senderA },
+    );
+    expect(translate).toHaveBeenCalledTimes(2);
+  });
+
+  it("remembers an early same-sender cancel so a reordered translate cannot start provider work", async () => {
+    const translate = vi.fn((request: TranslationRequest) =>
+      Promise.resolve(successResults(request)),
+    );
+    const handleMessage = createBackgroundMessageHandler({
+      name: "early-cancel",
+      translate,
+    });
+
+    await expect(
+      handleMessage(
+        createBackgroundCancelTranslationMessage(operationIds.primary),
+        { sender: senderA },
+      ),
+    ).resolves.toMatchObject({ ok: true, cancelled: false });
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(
+          makeRequest(["Must not reach the provider after an early cancel"]),
+          operationIds.primary,
+        ),
+        { sender: senderA },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TRANSLATION_CANCELLED" },
+    });
+    expect(translate).not.toHaveBeenCalled();
+  });
+
+  it("does not let one sender's pending cancel block the same UUID for another sender", async () => {
+    const translate = vi.fn((request: TranslationRequest) =>
+      Promise.resolve(successResults(request)),
+    );
+    const handleMessage = createBackgroundMessageHandler({
+      name: "cross-sender-early-cancel",
+      translate,
+    });
+    const request = makeRequest(["Sender-isolated pending cancellation"]);
+
+    await handleMessage(
+      createBackgroundCancelTranslationMessage(operationIds.primary),
+      { sender: senderA },
+    );
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(request, operationIds.primary),
+        { sender: senderB },
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(request, operationIds.primary),
+        { sender: senderA },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TRANSLATION_CANCELLED" },
+    });
+    expect(translate).toHaveBeenCalledOnce();
+  });
+
+  it("isolates pending-cancel eviction pressure to the sender that created it", async () => {
+    const translate = vi.fn((request: TranslationRequest) =>
+      Promise.resolve(successResults(request)),
+    );
+    const handleMessage = createBackgroundMessageHandler({
+      name: "pending-cancel-capacity-isolation",
+      translate,
+    });
+
+    await handleMessage(
+      createBackgroundCancelTranslationMessage(operationIds.primary),
+      { sender: senderA },
+    );
+    for (let index = 1; index <= 256; index += 1) {
+      await handleMessage(
+        createBackgroundCancelTranslationMessage(operationIdFor(index)),
+        { sender: senderB },
+      );
+    }
+
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(
+          makeRequest(["Sender A cancellation survives sender B pressure"]),
+          operationIds.primary,
+        ),
+        { sender: senderA },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TRANSLATION_CANCELLED" },
+    });
+    expect(translate).not.toHaveBeenCalled();
+  });
+
+  it("bounds pending cancellations by evicting only the same sender's oldest entry", async () => {
+    const translate = vi.fn((request: TranslationRequest) =>
+      Promise.resolve(successResults(request)),
+    );
+    const handleMessage = createBackgroundMessageHandler({
+      name: "bounded-pending-cancel",
+      translate,
+    });
+
+    for (let index = 1; index <= 257; index += 1) {
+      await handleMessage(
+        createBackgroundCancelTranslationMessage(operationIdFor(index)),
+        { sender: senderA },
+      );
+    }
+
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(
+          makeRequest(["Oldest cancellation was locally evicted"]),
+          operationIdFor(1),
+        ),
+        { sender: senderA },
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(
+          makeRequest(["Newest cancellation remains pending"]),
+          operationIdFor(257),
+        ),
+        { sender: senderA },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TRANSLATION_CANCELLED" },
+    });
+    expect(translate).toHaveBeenCalledOnce();
+  });
+
+  it("bounds pending sender scopes without evicting an existing sender", async () => {
+    const translate = vi.fn((request: TranslationRequest) =>
+      Promise.resolve(successResults(request)),
+    );
+    const handleMessage = createBackgroundMessageHandler({
+      name: "bounded-pending-cancel-senders",
+      translate,
+    });
+
+    await handleMessage(
+      createBackgroundCancelTranslationMessage(operationIds.primary),
+      { sender: senderA },
+    );
+    for (let index = 0; index < 63; index += 1) {
+      await handleMessage(
+        createBackgroundCancelTranslationMessage(operationIdFor(index + 1)),
+        {
+          sender: {
+            tab: { id: 100 + index },
+            frameId: 0,
+            documentId: `capacity-document-${String(index)}`,
+          },
+        },
+      );
+    }
+    const overflowSender = {
+      tab: { id: 999 },
+      frameId: 0,
+      documentId: "overflow-document",
+    };
+    await handleMessage(
+      createBackgroundCancelTranslationMessage(operationIds.secondary),
+      { sender: overflowSender },
+    );
+
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(
+          makeRequest(["Existing sender state remains retained"]),
+          operationIds.primary,
+        ),
+        { sender: senderA },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "TRANSLATION_CANCELLED" },
+    });
+    await expect(
+      handleMessage(
+        createBackgroundTranslationMessage(
+          makeRequest(["Overflow sender state was not retained"]),
+          operationIds.secondary,
+        ),
+        { sender: overflowSender },
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(translate).toHaveBeenCalledOnce();
+  });
 });
 
 describe("background listener registration", () => {
@@ -323,6 +784,98 @@ describe("background listener registration", () => {
         message: "Paralume could not complete the request.",
         retryable: true,
       },
+    });
+  });
+
+  it("forwards sender context and serves translate/cancel messages through one listener", async () => {
+    type Sender = typeof senderA;
+    type Listener = (
+      message: unknown,
+      sender: Sender,
+      sendResponse: (response: unknown) => void,
+    ) => boolean;
+    let listener: Listener | undefined;
+    const seenSenders: unknown[] = [];
+    registerBackgroundMessageListener<Sender>(
+      {
+        addListener(next) {
+          listener = next;
+        },
+      },
+      (message, context) => {
+        seenSenders.push(context.sender);
+        if (
+          typeof message === "object" &&
+          message !== null &&
+          "command" in message &&
+          message.command === "cancel-translation"
+        ) {
+          return Promise.resolve({
+            protocolVersion: 1,
+            ok: true,
+            cancelled: false,
+          });
+        }
+        return Promise.resolve({ protocolVersion: 1, ok: true, results: [] });
+      },
+    );
+    const sendResponse = vi.fn();
+    if (listener === undefined) {
+      throw new Error("Background listener was not registered.");
+    }
+
+    expect(
+      listener(
+        createBackgroundCancelTranslationMessage(operationIds.unknown),
+        senderA,
+        sendResponse,
+      ),
+    ).toBe(true);
+    await vi.waitFor(() => {
+      expect(sendResponse).toHaveBeenCalledOnce();
+    });
+    expect(seenSenders).toEqual([senderA]);
+  });
+
+  it("keeps the runtime response channel open until in-flight handler work settles", async () => {
+    type Listener = (
+      message: unknown,
+      sender: unknown,
+      sendResponse: (response: unknown) => void,
+    ) => boolean;
+    let listener: Listener | undefined;
+    let resolveHandler: ((response: unknown) => void) | undefined;
+    registerBackgroundMessageListener(
+      {
+        addListener(next) {
+          listener = next;
+        },
+      },
+      () =>
+        new Promise((resolve) => {
+          resolveHandler = resolve;
+        }),
+    );
+    const sendResponse = vi.fn();
+    if (listener === undefined) {
+      throw new Error("Background listener was not registered.");
+    }
+
+    expect(listener({ command: "translate" }, senderA, sendResponse)).toBe(
+      true,
+    );
+    expect(sendResponse).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => {
+      expect(resolveHandler).toBeDefined();
+    });
+    resolveHandler?.({ protocolVersion: 1, ok: true, results: [] });
+    await vi.waitFor(() => {
+      expect(sendResponse).toHaveBeenCalledWith({
+        protocolVersion: 1,
+        ok: true,
+        results: [],
+      });
     });
   });
 });

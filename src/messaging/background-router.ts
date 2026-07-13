@@ -1,5 +1,6 @@
 export type RuntimeMessageHandler<Response = unknown> = (
   message: unknown,
+  context?: { readonly sender: unknown },
 ) => Promise<Response>;
 
 function isSettingsTarget(message: unknown): boolean {
@@ -15,8 +16,8 @@ export function createBackgroundRouter<TranslationResponse, SettingsResponse>(
   translationHandler: RuntimeMessageHandler<TranslationResponse>,
   settingsHandler: RuntimeMessageHandler<SettingsResponse>,
 ): RuntimeMessageHandler<TranslationResponse | SettingsResponse> {
-  return (message) =>
+  return (message, context) =>
     isSettingsTarget(message)
-      ? settingsHandler(message)
-      : translationHandler(message);
+      ? settingsHandler(message, context)
+      : translationHandler(message, context);
 }

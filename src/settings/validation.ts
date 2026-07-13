@@ -1,5 +1,12 @@
+import type { UiLanguageSetting } from "../localization";
+import { UserFacingError } from "../shared/errors";
+import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  DEFAULT_RETRY_SETTINGS,
+} from "./defaults";
 import {
   PROVIDER_SETTINGS_VERSION,
+  type AppearanceSettings,
   type MicrosoftSettingsDraft,
   type OpenAiProtocol,
   type OpenAiReasoningEffort,
@@ -7,8 +14,9 @@ import {
   type ProviderId,
   type ProviderSettings,
   type ProviderSettingsDraft,
+  type RetrySettings,
+  type TranslationFontFamily,
 } from "./types";
-import { UserFacingError } from "../shared/errors";
 
 const PROVIDERS: ReadonlySet<ProviderId> = new Set([
   "mock",
@@ -26,6 +34,22 @@ const REASONING_EFFORTS: ReadonlySet<OpenAiReasoningEffort> = new Set([
   "medium",
   "high",
 ]);
+const FONT_FAMILIES: ReadonlySet<TranslationFontFamily> = new Set([
+  "system",
+  "sans-serif",
+  "serif",
+  "monospace",
+]);
+const UI_LANGUAGES: ReadonlySet<UiLanguageSetting> = new Set([
+  "system",
+  "zh-CN",
+  "en",
+]);
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/u;
+
+function invalid(): never {
+  throw new UserFacingError("VALIDATION_ERROR");
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -36,7 +60,7 @@ function normalizeHttpsEndpoint(value: string): string {
   try {
     url = new URL(value);
   } catch {
-    throw new UserFacingError("VALIDATION_ERROR");
+    return invalid();
   }
 
   if (
@@ -46,7 +70,7 @@ function normalizeHttpsEndpoint(value: string): string {
     url.search !== "" ||
     url.hash !== ""
   ) {
-    throw new UserFacingError("VALIDATION_ERROR");
+    return invalid();
   }
 
   return url.toString().replace(/\/$/u, "");
@@ -54,38 +78,103 @@ function normalizeHttpsEndpoint(value: string): string {
 
 function requireNonEmpty(value: string): string {
   const normalized = value.trim();
-  if (normalized === "") {
-    throw new UserFacingError("VALIDATION_ERROR");
+  return normalized === "" ? invalid() : normalized;
+}
+
+function clampNumber(value: unknown, minimum: number, maximum: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return invalid();
   }
-  return normalized;
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeColor(value: unknown): string {
+  if (typeof value !== "string" || !HEX_COLOR.test(value)) {
+    return invalid();
+  }
+  const normalized = value.toLowerCase();
+  if (normalized.length === 7) {
+    return normalized;
+  }
+  const red = normalized.charAt(1);
+  const green = normalized.charAt(2);
+  const blue = normalized.charAt(3);
+  return `#${red}${red}${green}${green}${blue}${blue}`;
+}
+
+export function validateAppearanceSettings(
+  value: AppearanceSettings,
+): AppearanceSettings {
+  if (!FONT_FAMILIES.has(value.fontFamily)) {
+    return invalid();
+  }
+  return {
+    fontFamily: value.fontFamily,
+    fontSize: clampNumber(value.fontSize, 12, 32),
+    textColor: normalizeColor(value.textColor),
+    backgroundColor: normalizeColor(value.backgroundColor),
+    lineHeight: clampNumber(value.lineHeight, 1, 2.5),
+    opacity: clampNumber(value.opacity, 0.4, 1),
+    verticalSpacing: clampNumber(value.verticalSpacing, 0, 32),
+  };
+}
+
+export function validateRetrySettings(value: RetrySettings): RetrySettings {
+  if (typeof value.enabled !== "boolean") {
+    return invalid();
+  }
+  const boundedRetries = clampNumber(value.maxRetries, 0, 2);
+  return {
+    enabled: value.enabled,
+    maxRetries: Math.trunc(boundedRetries),
+  };
+}
+
+function validateUiLanguage(value: UiLanguageSetting): UiLanguageSetting {
+  return UI_LANGUAGES.has(value) ? value : invalid();
+}
+
+function validateOpenAiSettings(
+  value: OpenAiSettingsDraft,
+): OpenAiSettingsDraft {
+  if (!OPENAI_PROTOCOLS.has(value.protocol)) {
+    return invalid();
+  }
+  if (!REASONING_EFFORTS.has(value.reasoningEffort)) {
+    return invalid();
+  }
+  return {
+    baseUrl: normalizeHttpsEndpoint(value.baseUrl),
+    model: requireNonEmpty(value.model),
+    protocol: value.protocol,
+    reasoningEffort: value.reasoningEffort,
+  };
+}
+
+function validateMicrosoftSettings(
+  value: MicrosoftSettingsDraft,
+): MicrosoftSettingsDraft {
+  return {
+    endpoint: normalizeHttpsEndpoint(value.endpoint),
+    region: requireNonEmpty(value.region),
+  };
 }
 
 export function validateProviderSettingsDraft(
   draft: ProviderSettingsDraft,
 ): ProviderSettings {
   if (!PROVIDERS.has(draft.provider)) {
-    throw new UserFacingError("VALIDATION_ERROR");
-  }
-  if (!OPENAI_PROTOCOLS.has(draft.openai.protocol)) {
-    throw new UserFacingError("VALIDATION_ERROR");
-  }
-  if (!REASONING_EFFORTS.has(draft.openai.reasoningEffort)) {
-    throw new UserFacingError("VALIDATION_ERROR");
+    return invalid();
   }
 
   return {
     version: PROVIDER_SETTINGS_VERSION,
     provider: draft.provider,
-    openai: {
-      baseUrl: normalizeHttpsEndpoint(draft.openai.baseUrl),
-      model: requireNonEmpty(draft.openai.model),
-      protocol: draft.openai.protocol,
-      reasoningEffort: draft.openai.reasoningEffort,
-    },
-    microsoft: {
-      endpoint: normalizeHttpsEndpoint(draft.microsoft.endpoint),
-      region: requireNonEmpty(draft.microsoft.region),
-    },
+    openai: validateOpenAiSettings(draft.openai),
+    microsoft: validateMicrosoftSettings(draft.microsoft),
+    retry: validateRetrySettings(draft.retry),
+    appearance: validateAppearanceSettings(draft.appearance),
+    uiLanguage: validateUiLanguage(draft.uiLanguage),
   };
 }
 
@@ -94,78 +183,54 @@ export function deriveHttpsOriginPattern(endpoint: string): string {
   return `${new URL(normalized).origin}/*`;
 }
 
-function parseOpenAiSettings(value: unknown): OpenAiSettingsDraft & {
-  apiKey?: string;
-} {
-  if (!isRecord(value)) {
-    throw new UserFacingError("VALIDATION_ERROR");
-  }
+function parseOpenAiSettings(value: unknown): ProviderSettings["openai"] {
   if (
+    !isRecord(value) ||
     typeof value["baseUrl"] !== "string" ||
     typeof value["model"] !== "string"
   ) {
-    throw new UserFacingError("VALIDATION_ERROR");
+    return invalid();
   }
-
-  const draft: OpenAiSettingsDraft = {
+  const validated = validateOpenAiSettings({
     baseUrl: value["baseUrl"],
     model: value["model"],
     protocol: value["protocol"] as OpenAiProtocol,
     reasoningEffort: value["reasoningEffort"] as OpenAiReasoningEffort,
-  };
-  const validated = validateProviderSettingsDraft({
-    provider: "openai",
-    openai: draft,
-    microsoft: {
-      endpoint: "https://api.cognitive.microsofttranslator.com",
-      region: "global",
-    },
-  }).openai;
-
+  });
   return typeof value["apiKey"] === "string" && value["apiKey"] !== ""
     ? { ...validated, apiKey: value["apiKey"] }
     : validated;
 }
 
-function parseMicrosoftSettings(value: unknown): MicrosoftSettingsDraft & {
-  apiKey?: string;
-} {
-  if (!isRecord(value)) {
-    throw new UserFacingError("VALIDATION_ERROR");
-  }
+function parseMicrosoftSettings(value: unknown): ProviderSettings["microsoft"] {
   if (
+    !isRecord(value) ||
     typeof value["endpoint"] !== "string" ||
     typeof value["region"] !== "string"
   ) {
-    throw new UserFacingError("VALIDATION_ERROR");
+    return invalid();
   }
-
-  const draft: MicrosoftSettingsDraft = {
+  const validated = validateMicrosoftSettings({
     endpoint: value["endpoint"],
     region: value["region"],
-  };
-  const validated = validateProviderSettingsDraft({
-    provider: "microsoft",
-    openai: {
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-5-mini",
-      protocol: "responses",
-      reasoningEffort: "low",
-    },
-    microsoft: draft,
-  }).microsoft;
-
+  });
   return typeof value["apiKey"] === "string" && value["apiKey"] !== ""
     ? { ...validated, apiKey: value["apiKey"] }
     : validated;
+}
+
+export interface ParsedStoredSettings {
+  settings: ProviderSettings;
+  migrated: boolean;
 }
 
 export function parseStoredProviderSettings(
   value: unknown,
-): ProviderSettings | undefined {
+): ParsedStoredSettings | undefined {
   if (
     !isRecord(value) ||
-    value["version"] !== PROVIDER_SETTINGS_VERSION ||
+    (value["version"] !== 1 &&
+      value["version"] !== PROVIDER_SETTINGS_VERSION) ||
     typeof value["provider"] !== "string" ||
     !PROVIDERS.has(value["provider"] as ProviderId)
   ) {
@@ -173,12 +238,23 @@ export function parseStoredProviderSettings(
   }
 
   try {
-    return {
+    const migrated = value["version"] === 1;
+    const settings: ProviderSettings = {
       version: PROVIDER_SETTINGS_VERSION,
       provider: value["provider"] as ProviderId,
       openai: parseOpenAiSettings(value["openai"]),
       microsoft: parseMicrosoftSettings(value["microsoft"]),
+      retry: migrated
+        ? { ...DEFAULT_RETRY_SETTINGS }
+        : validateRetrySettings(value["retry"] as RetrySettings),
+      appearance: migrated
+        ? { ...DEFAULT_APPEARANCE_SETTINGS }
+        : validateAppearanceSettings(value["appearance"] as AppearanceSettings),
+      uiLanguage: migrated
+        ? "system"
+        : validateUiLanguage(value["uiLanguage"] as UiLanguageSetting),
     };
+    return { settings, migrated };
   } catch {
     return undefined;
   }

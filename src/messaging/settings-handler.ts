@@ -1,5 +1,7 @@
 import { sanitizeError, UserFacingError } from "../shared/errors";
+import { createMessage, type MessageId } from "../localization";
 import type {
+  ContentSettings,
   ProviderSettingsDraft,
   PublicProviderSettings,
 } from "../settings/types";
@@ -7,11 +9,12 @@ import type { TranslationProviderResolver } from "../translation/provider";
 import { createErrorResponse, PROTOCOL_VERSION } from "./protocol";
 import {
   parseSettingsRequest,
-  type SettingsResponse,
+  type AnySettingsResponse,
 } from "./settings-protocol";
 
 export interface SettingsRepository {
   loadPublic(): Promise<PublicProviderSettings>;
+  loadContent(): Promise<ContentSettings>;
   save(
     draft: ProviderSettingsDraft,
     replacements: {
@@ -25,12 +28,12 @@ export interface SettingsRepository {
 export function createSettingsMessageHandler(
   repository: SettingsRepository,
   resolveProvider: TranslationProviderResolver,
-): (message: unknown) => Promise<SettingsResponse> {
-  const success = async (message: string): Promise<SettingsResponse> => ({
+): (message: unknown) => Promise<AnySettingsResponse> {
+  const success = async (message: MessageId): Promise<AnySettingsResponse> => ({
     protocolVersion: PROTOCOL_VERSION,
     ok: true,
     settings: await repository.loadPublic(),
-    message,
+    message: createMessage(message),
   });
 
   return async (message) => {
@@ -42,16 +45,22 @@ export function createSettingsMessageHandler(
     try {
       switch (parsed.value.command) {
         case "get":
-          return await success("Provider settings loaded.");
+          return await success("settings.loaded");
+        case "get-content":
+          return {
+            protocolVersion: PROTOCOL_VERSION,
+            ok: true,
+            contentSettings: await repository.loadContent(),
+          };
         case "save":
           await repository.save(parsed.value.draft, parsed.value.apiKeys);
-          return await success("Provider settings saved.");
+          return await success("settings.saved");
         case "clear-api-key":
           await repository.clearApiKey(parsed.value.provider);
           return await success(
             parsed.value.provider === "openai"
-              ? "OpenAI-compatible API key cleared."
-              : "Microsoft Translator API key cleared.",
+              ? "settings.openAiKeyCleared"
+              : "settings.microsoftKeyCleared",
           );
         case "test-connection": {
           const provider = await resolveProvider();
@@ -72,7 +81,7 @@ export function createSettingsMessageHandler(
           ) {
             throw new UserFacingError("MALFORMED_PROVIDER_OUTPUT");
           }
-          return await success("Provider connection test succeeded.");
+          return await success("settings.testSucceeded");
         }
       }
     } catch (error) {

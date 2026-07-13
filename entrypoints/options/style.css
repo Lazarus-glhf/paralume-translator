@@ -28,7 +28,7 @@ select {
 }
 
 .options {
-  width: min(720px, calc(100% - 40px));
+  width: min(900px, calc(100% - 40px));
   margin: 0 auto;
   padding: 64px 0;
 }
@@ -59,6 +59,11 @@ section {
   border-radius: 16px;
   background: #fffdf8;
   box-shadow: 0 16px 40px rgb(35 57 48 / 8%);
+}
+
+.options-grid {
+  display: grid;
+  gap: 20px;
 }
 
 h2 {
@@ -104,11 +109,35 @@ button:focus-visible {
   border-top: 1px solid #e0e6e2;
 }
 
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin: 18px 0;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-block: 16px;
+}
+
+.checkbox-label input {
+  width: 18px;
+  min-height: 18px;
+  accent-color: #315b49;
+}
+
+input[type="color"] {
+  padding: 4px;
+}
+
 .settings-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 20px;
+  margin-top: 24px;
 }
 
 button {

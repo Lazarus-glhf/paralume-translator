@@ -13,9 +13,12 @@ import type {
   TranslationResult,
   TranslationSuccess,
 } from "../shared/types";
+import { parseMessageDescriptor } from "../localization";
 import {
   PROTOCOL_VERSION,
+  type BackgroundMessage,
   type BackgroundTranslationMessage,
+  type CancelTranslationResponse,
   type ContentCommand,
   type ContentCommandMessage,
   type ContentResponse,
@@ -89,6 +92,15 @@ function isTranslationRequest(value: unknown): value is TranslationRequest {
   return ids.size === value["segments"].length;
 }
 
+export function isOperationId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+      value,
+    )
+  );
+}
+
 function isStructuredError(value: unknown): value is StructuredError {
   return (
     isRecord(value) &&
@@ -148,18 +160,47 @@ function isContentState(value: unknown): value is ContentState {
 export function parseBackgroundRequest(
   value: unknown,
 ): ValidationResult<BackgroundTranslationMessage> {
+  const parsed = parseBackgroundMessage(value);
+  if (!parsed.ok || parsed.value.command !== "translate") {
+    return parsed.ok ? invalid() : parsed;
+  }
+  return { ok: true, value: parsed.value };
+}
+
+export function parseBackgroundMessage(
+  value: unknown,
+): ValidationResult<BackgroundMessage> {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["protocolVersion", "target", "command", "request"]) ||
     value["protocolVersion"] !== PROTOCOL_VERSION ||
     value["target"] !== "background" ||
-    value["command"] !== "translate" ||
-    !isTranslationRequest(value["request"])
+    !isOperationId(value["operationId"])
   ) {
     return invalid();
   }
 
-  return { ok: true, value: value as unknown as BackgroundTranslationMessage };
+  if (
+    value["command"] === "translate" &&
+    hasOnlyKeys(value, [
+      "protocolVersion",
+      "target",
+      "command",
+      "operationId",
+      "request",
+    ]) &&
+    isTranslationRequest(value["request"])
+  ) {
+    return { ok: true, value: value as unknown as BackgroundMessage };
+  }
+
+  if (
+    value["command"] === "cancel-translation" &&
+    hasOnlyKeys(value, ["protocolVersion", "target", "command", "operationId"])
+  ) {
+    return { ok: true, value: value as unknown as BackgroundMessage };
+  }
+
+  return invalid();
 }
 
 export function parseContentCommand(
@@ -204,6 +245,29 @@ export function parseTranslationResponse(
   return invalid();
 }
 
+export function parseCancelTranslationResponse(
+  value: unknown,
+): ValidationResult<CancelTranslationResponse> {
+  if (!isRecord(value)) {
+    return invalid();
+  }
+
+  if (isErrorResponse(value)) {
+    return { ok: true, value: value as unknown as ErrorResponse };
+  }
+
+  if (
+    hasOnlyKeys(value, ["protocolVersion", "ok", "cancelled"]) &&
+    value["protocolVersion"] === PROTOCOL_VERSION &&
+    value["ok"] === true &&
+    typeof value["cancelled"] === "boolean"
+  ) {
+    return { ok: true, value: value as unknown as CancelTranslationResponse };
+  }
+
+  return invalid();
+}
+
 export function parseContentResponse(
   value: unknown,
 ): ValidationResult<ContentResponse> {
@@ -220,7 +284,7 @@ export function parseContentResponse(
     value["protocolVersion"] === PROTOCOL_VERSION &&
     value["ok"] === true &&
     isContentState(value["state"]) &&
-    isNonEmptyString(value["message"], 2_000)
+    parseMessageDescriptor(value["message"]) !== undefined
   ) {
     return { ok: true, value: value as unknown as ContentResponse };
   }

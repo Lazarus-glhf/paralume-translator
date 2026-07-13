@@ -1,15 +1,18 @@
 # Paralume
 
+**English** | [简体中文](./README.zh-CN.md)
+
 Paralume（并译）is a local-first bilingual webpage translator for Chrome and
 Edge. It extracts readable page blocks, sends validated requests to the
 background service worker, batches provider work, and places each translation
 directly with its original block.
 
-Milestone 2 adds selectable OpenAI-compatible and Microsoft Translator BYOK
-providers. The deterministic Mock provider remains available only when the user
-explicitly selects it for development; Paralume never falls back to Mock after
-a real provider configuration or request failure. Mock output is prefixed with
-`【Mock zh-CN】` so it cannot be mistaken for real translation.
+Alpha `0.0.2` adds bounded transient-failure retries, per-segment manual Retry
+controls, appearance settings limited to Paralume-owned UI, and Simplified
+Chinese/English interfaces. Selectable OpenAI-compatible and Microsoft
+Translator BYOK providers remain available. The deterministic Mock provider is
+used only when explicitly selected for development; Paralume never falls back
+to Mock after a real-provider configuration or request failure.
 
 Paralume is currently an **alpha prerelease** intended for tester feedback.
 GitHub Releases provide reviewed Chrome and Edge ZIP assets for unpacked
@@ -22,8 +25,8 @@ automated or part of the current release workflow.
    [GitHub Releases](https://github.com/Lazarus-glhf/paralume-translator/releases)
    page and select the intended prerelease.
 2. Download the ZIP for your browser, named like
-   `paralume-translator-0.0.1-chrome.zip` or
-   `paralume-translator-0.0.1-edge.zip`, plus the matching
+   `paralume-translator-0.0.2-chrome.zip` or
+   `paralume-translator-0.0.2-edge.zip`, plus the matching
    `SHA256SUMS.txt` file.
 3. Verify the ZIP's SHA-256 digest against its line in the checksum file. For
    example, use `sha256sum <zip>` on Linux, `shasum -a 256 <zip>` on macOS,
@@ -48,30 +51,76 @@ Mock provider needs no credential and never contacts a translation provider.
 
 Open the popup and explicitly choose an action:
 
-- **Translate current page** injects the page runtime on demand and translates
+- **Translate page** injects the page runtime on demand and translates
   eligible, unprocessed blocks.
-- **Hide/Show translations** changes only the visibility of existing
+- **Show / hide** changes only the visibility of existing
   translation blocks and never calls the provider.
-- **Clear translations** removes Paralume-owned translation nodes and markers,
-  restoring the original page structure.
+- **Clear** synchronously removes Paralume-owned translation nodes and markers,
+  restores the original page structure, and sends cancellation for active page
+  translation operations without waiting for settings IPC.
 
 Repeated popup actions and repeated runtime injection are idempotent. Original
 DOM nodes, inline links, event listeners, and framework ownership are retained;
 provider output is inserted with `textContent`, never as executable HTML.
-Concurrent Translate commands share one in-flight request. Clear invalidates any
-pending Translate generation, so a late response cannot restore cleared or
-newer translation state. Toggle always updates the translations currently
-present; pending results use that visibility when they finish. If no translation
-exists yet, Toggle is a no-op and pending results remain visible.
+Concurrent Translate commands share one in-flight request. Every page or manual
+retry operation uses a validated opaque UUID. The background keys active work
+and bounded early-cancellation state by the composite `(sender scope,
+operation UUID)`, so the same UUID in another tab/document cannot collide,
+cancel, consume, or evict a sender's operation. Toggle updates only translations
+currently present and does not wait for settings. Pending results use the
+current visibility when they finish; if no translation exists yet, Toggle is a
+no-op.
 
 The Options page selects the provider, edits provider-specific settings, saves
 or clears masked credentials, and runs a one-segment connection test. A blank
 masked key field preserves an existing stored key; the key itself is never read
-back into Options.
+back into Options. It also configures automatic retry, translation appearance,
+and UI language (`system`, `zh-CN`, or `en`).
+
+Recoverable whole-batch failures (`RATE_LIMITED`, `REQUEST_TIMEOUT`,
+`NETWORK_ERROR`, and `SERVER_UNAVAILABLE`) are retried automatically when
+enabled, with at most two additional attempts. Backoff is bounded exponential
+delay with jitter, and a valid provider `Retry-After` hint is honored only
+within a safe upper bound. Authentication, permission, validation,
+configuration, malformed JSON, malformed structured output, missing/duplicate
+result, and other permanent failures are not retried automatically. Automatic
+retry repeats the same whole batch and can increase provider usage or cost; it
+never silently splits a malformed batch and never falls back to Mock.
+
+Only genuine failures returned in a provider result array receive an accessible
+bottom-right **Retry** control. Request-wide authentication, permission,
+configuration, validation, malformed-output, invalid-message, and internal
+failures are reported once through the safe popup/status error boundary and do
+not create per-segment Retry requests. Manual retry sends only that source
+segment, deduplicates repeated clicks, shows a pending state, and replaces the
+same failure node on success.
+
+Clear removes Paralume UI synchronously, advances the content generation, and
+requests cancellation without waiting for cancellation IPC. The background
+listener returns literal `true` to keep the one-time runtime response channel
+open, and the running handler event keeps the worker active while its in-flight
+promise settles, subject to Chromium's normal lifetime limits. In an active
+worker, cancellation aborts retry sleep, provider fetch, and response-body
+reads. If Chromium forcibly terminates the worker process or execution context,
+that context's fetches, timers, retries, and `AbortController`s terminate with
+it; a restarted handler has fresh in-memory state and cannot abort an already
+nonexistent old-context controller. A cancel that reaches the new handler
+before a reordered translate is retained as a bounded, sender-scoped pending
+cancellation. Content-side generation checks reject any late response, so
+cleared or newer UI cannot be overwritten.
+
+Chromium still applies its normal extension-worker lifetime limits, and an
+upstream request accepted before cancellation or worker termination may still
+complete or be billed. Cancellation reduces avoidable work but is not an
+absolute fee-prevention guarantee; provider quota and billing limits remain
+important.
 
 ## Provider settings
 
-Provider settings are versioned and stored in `chrome.storage.local`:
+Settings are versioned and stored in `chrome.storage.local`. Alpha `0.0.2`
+migrates schema v1 data to v2 in place, preserving provider configuration and
+both API keys while adding retry, appearance, and language defaults. Public
+settings responses never include keys:
 
 - **Mock** is deterministic development output and must be selected explicitly.
 - **OpenAI-compatible** accepts an HTTPS Base URL, model, reasoning effort, API
@@ -95,16 +144,32 @@ credentials.
 
 OpenAI-compatible batches remain bounded at 20 segments and 6,000 source
 characters. Malformed JSON, malformed structured output, missing IDs, duplicate
-IDs, and partial batches fail the whole batch clearly. Milestone 2 does not
-retry one request per segment and does not automatically switch providers. The
-connection test sends the short text `Paralume connection test.` and may consume
-provider quota.
+IDs, and partial batches fail the whole batch clearly and are never
+automatically split into per-segment provider calls. The connection test sends
+the short text `Paralume connection test.` and may consume provider quota.
 
 Provider, fetch, storage, permission, and background exceptions are converted
 to an allowlisted structured error code with a fixed safe message before they
 cross a runtime boundary. Upstream exception text, causes, URLs, response
 bodies, credentials, and source-page text are never included in settings,
 translation, per-segment failure, content-controller, or popup error responses.
+
+## Retry, appearance, and language
+
+Appearance settings affect only Paralume-owned translation, failure, pending,
+and Retry UI. They never alter source-page styles. Supported settings are a
+bounded font-family enum, font size, text color, background color, line height,
+opacity, and vertical spacing. Numeric values are clamped to reviewed ranges,
+colors are normalized safe hexadecimal values, and arbitrary CSS declarations,
+URLs, and executable values are rejected. Reset appearance restores safe
+defaults. New settings apply to future translations and to existing owned nodes
+when the injected runtime next refreshes settings.
+
+Interface language choices are `system` (default), `zh-CN`, and `en`. System
+resolution uses the browser UI language with a safe English fallback. Popup,
+Options, page failure/retry/pending UI, statuses, validation messages, and fixed
+errors are localized at the rendering boundary. Runtime protocols use stable
+message identifiers and error codes rather than English text as logic keys.
 
 ## Page eligibility
 
@@ -140,15 +205,17 @@ used by themselves to exclude content.
 - WXT packages Manifest V3 extensions for Chrome and Edge.
 - React is limited to Popup and Options.
 - Extraction, eligibility, protocol validation, provider contracts, HTTP
-  providers, batching, rendering, cleanup, settings, and the page controller
-  are strict, framework-independent TypeScript.
+  providers, retry policy, localization, appearance validation/application,
+  batching, rendering, cleanup, settings, and the page controller are strict,
+  framework-independent TypeScript.
 - The popup queries the active tab only after a user action, injects the WXT
   unlisted `paralume.js` artifact with `browser.scripting.executeScript`, and
   sends a validated page command.
 - The page runtime extracts source segments and sends only validated translation
   requests to the background service worker.
-- The background service worker owns settings reads, provider selection, and
-  provider execution. Options submits replacement credentials through a
+- The background service worker owns settings reads, provider selection,
+  provider execution, and automatic whole-batch retry. Options submits
+  replacement credentials through a
   validated runtime message but never reads stored keys. Content scripts do not
   receive provider configuration or secrets.
 - Stable segment IDs come from a per-runtime element `WeakMap`. Duplicate text
@@ -196,6 +263,7 @@ entrypoints/
   popup/              React page controls and accessible status/error UI
 src/
   content/             Eligibility, extraction, rendering, cleanup, controller
+  localization/        English/Chinese catalogs, locale resolution, formatting
   messaging/           Translation/settings protocols, validation, routing
   options/             Framework-independent Options runtime client
   popup/               Framework-independent popup command client
@@ -235,9 +303,10 @@ WXT writes unpacked builds beneath `.output/chrome-mv3` and
 ## Prerelease packaging and versioning
 
 `package.json` is the single release-version source. It uses canonical numeric
-SemVer such as `0.0.1`, which is also valid as a Chromium manifest version. The
-first Alpha is version `0.0.1` and tag `v0.0.1`; the future first stable release
-will use `0.1.0`. WXT derives both generated Chrome and Edge manifest versions
+SemVer such as `0.0.2`, which is also valid as a Chromium manifest version. The
+current Alpha target is `0.0.2`; a future reviewed prerelease would use tag
+`v0.0.2`, while the future first stable release will use `0.1.0`. WXT derives
+both generated Chrome and Edge manifest versions
 from that value; do not add a duplicate hard-coded version to `wxt.config.ts`.
 
 To simulate release packaging locally after installing Playwright:
@@ -254,7 +323,7 @@ SHA-256 checksum file beneath `release-assets/`.
 
 For a tag-driven prerelease, update only the `package.json` version and lockfile
 if needed, complete review and verification on `main`, then create the exact
-matching tag `v<package-version>` (for example, `v0.0.1`). Pushing that tag runs
+matching tag `v<package-version>` (for example, `v0.0.2`). Pushing that tag runs
 the release gate and creates an Alpha GitHub prerelease. A mismatched,
 non-canonical, or placeholder version fails before packaging.
 
@@ -308,10 +377,14 @@ fixture server on `127.0.0.1:4173`, and runs the suite with Playwright's pinned
 Chromium. `pnpm verify` runs the complete format, lint, typecheck, unit, Chrome
 build, Edge build, and E2E sequence.
 
-Vitest includes a deterministic loopback HTTP server for OpenAI Responses, Chat
-Completions, and Microsoft Translator v3. It verifies request paths, structured
-payloads, authentication headers, ID mapping, malformed output, 429 responses,
-timeouts, and partial batches without contacting an external service.
+Vitest includes deterministic clocks/randomness for retry policy plus a
+loopback HTTP server for OpenAI Responses, Chat Completions, and Microsoft
+Translator v3. It verifies sender-scoped operation IDs, settings races,
+bounded pending-cancellation isolation, simulated handler restart,
+cancellation during retry sleep/fetch/body reads, late-response generation
+rejection, request paths, structured payloads, authentication headers, ID
+mapping, malformed output, 429 responses, `Retry-After`, timeouts, whole-batch
+attempt counts, and partial batches without contacting an external service.
 
 After each build, inspect the generated manifest and confirm that permissions
 are exactly `activeTab`, `scripting`, and `storage`; optional host permissions
@@ -344,6 +417,11 @@ origin, and proves the old grant is removed. It then terminates the service
 worker, proves stored settings reload in the restarted worker, clears the key
 through the UI, reopens to verify it is no longer configured, revokes the exact
 origin, and confirms translation is blocked with a fixed safe permission error.
+It additionally configures Chinese, retry, and appearance through Options,
+restarts the service worker, verifies persistence, exercises deterministic Mock
+failures through exactly two automatic retries and one manual single-segment
+retry, and confirms in-place replacement, source-style/listener preservation,
+and complete owned-DOM cleanup. No provider secrets are used.
 
 A separate, clearly labeled lower-level content-runtime integration test still
 loads the fixture into an extension-owned page, injects the built runtime, and

@@ -4,16 +4,21 @@ import { clearTranslations } from "../src/content/cleanup";
 import {
   PARALUME_OWNED_ATTRIBUTE,
   PARALUME_SOURCE_ID_ATTRIBUTE,
+  PARALUME_RETRY_ATTRIBUTE,
   PARALUME_TRANSLATION_FOR_ATTRIBUTE,
   PARALUME_TRANSLATION_STATUS_ATTRIBUTE,
 } from "../src/content/constants";
 import { extractSegments } from "../src/content/extractor";
 import {
+  applyAppearanceToTranslations,
   getContentState,
   renderTranslation,
+  setTranslationPending,
   setTranslationsVisible,
 } from "../src/content/renderer";
 import { createContentRuntimeState } from "../src/content/state";
+import { DEFAULT_APPEARANCE_SETTINGS } from "../src/settings/repository";
+import { createError } from "../src/shared/errors";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -168,18 +173,157 @@ describe("safe translation rendering", () => {
         },
       },
       state,
+      true,
+      { locale: "en", onRetry: vi.fn() },
     );
 
     expect(second).toBe(first);
-    expect(second.textContent).toBe(
-      "Translation unavailable. Provider could not translate this block.",
-    );
+    expect(second.textContent).toContain("Translation unavailable.");
+    expect(second.textContent).toContain("Retry");
     expect(second.getAttribute(PARALUME_TRANSLATION_STATUS_ATTRIBUTE)).toBe(
       "failure",
     );
     expect(
       document.querySelectorAll(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
     ).toHaveLength(1);
+  });
+
+  it("renders an accessible localized text-only retry control and pending state", () => {
+    document.body.innerHTML = `<p id="source">Readable retry source paragraph</p>`;
+    const state = createContentRuntimeState({ runtimeId: "retry-render" });
+    const extracted = extractSegments(document, state)[0];
+    const onRetry = vi.fn();
+    if (extracted === undefined) {
+      throw new Error("Retry fixture was not extracted.");
+    }
+
+    const translation = renderTranslation(
+      extracted,
+      {
+        id: extracted.segment.id,
+        status: "failure",
+        error: createError("AUTHENTICATION_FAILED"),
+      },
+      state,
+      true,
+      { locale: "zh-CN", onRetry },
+    );
+    const button = translation.querySelector<HTMLButtonElement>(
+      `[${PARALUME_RETRY_ATTRIBUTE}]`,
+    );
+
+    expect(translation.textContent).toContain(
+      "译文不可用。翻译服务拒绝了已配置的凭据。",
+    );
+    expect(translation.querySelector("img, script, style")).toBeNull();
+    expect(button).not.toBeNull();
+    expect(button?.type).toBe("button");
+    expect(button?.textContent).toBe("重试");
+    expect(button?.getAttribute("aria-label")).toBe("重试此可读文本块的翻译");
+    expect(button?.getAttribute(PARALUME_OWNED_ATTRIBUTE)).toBe("true");
+    expect(button?.style.justifySelf).toBe("end");
+
+    button?.click();
+    expect(onRetry).toHaveBeenCalledOnce();
+    setTranslationPending(translation, state, true, "zh-CN");
+    expect(button?.disabled).toBe(true);
+    expect(button?.textContent).toBe("正在重试…");
+    button?.click();
+    expect(onRetry).toHaveBeenCalledOnce();
+    setTranslationPending(translation, state, false, "zh-CN");
+    expect(button?.disabled).toBe(false);
+    expect(button?.textContent).toBe("重试");
+  });
+
+  it("renders a localized failure without Retry when no segment retry action is provided", () => {
+    document.body.innerHTML = `<p>Readable request-global failure source</p>`;
+    const state = createContentRuntimeState({ runtimeId: "global-render" });
+    const extracted = extractSegments(document, state)[0];
+    if (extracted === undefined) {
+      throw new Error("Global failure fixture was not extracted.");
+    }
+
+    const translation = renderTranslation(
+      extracted,
+      {
+        id: extracted.segment.id,
+        status: "failure",
+        error: createError("AUTHENTICATION_FAILED"),
+      },
+      state,
+      true,
+      { locale: "en" },
+    );
+
+    expect(translation.textContent).toContain(
+      "The provider rejected the configured credentials.",
+    );
+    expect(
+      translation.querySelector(`[${PARALUME_RETRY_ATTRIBUTE}]`),
+    ).toBeNull();
+  });
+
+  it("applies validated appearance only to owned existing/future UI", () => {
+    document.body.innerHTML = `<p id="source" style="color: rgb(1, 2, 3); margin: 19px">Readable appearance source paragraph</p>`;
+    const source = document.querySelector<HTMLElement>("#source");
+    const state = createContentRuntimeState({ runtimeId: "appearance-render" });
+    const extracted = extractSegments(document, state)[0];
+    if (source === null || extracted === undefined) {
+      throw new Error("Appearance fixture was not extracted.");
+    }
+    const originalSourceStyle = source.getAttribute("style");
+    const first = renderTranslation(
+      extracted,
+      {
+        id: extracted.segment.id,
+        status: "success",
+        translatedText: "Existing translation",
+      },
+      state,
+      true,
+      { locale: "en", appearance: DEFAULT_APPEARANCE_SETTINGS },
+    );
+    const custom = {
+      fontFamily: "serif" as const,
+      fontSize: 21,
+      textColor: "#112233",
+      backgroundColor: "#ddeeff",
+      lineHeight: 2,
+      opacity: 0.7,
+      verticalSpacing: 17,
+    };
+
+    applyAppearanceToTranslations(document, state, custom);
+
+    expect(first.style.fontFamily).toContain("serif");
+    expect(first.style.fontSize).toBe("21px");
+    expect(first.style.color).toBe("#112233");
+    expect(first.style.backgroundColor).toBe("#ddeeff");
+    expect(first.style.lineHeight).toBe("2");
+    expect(first.style.opacity).toBe("0.7");
+    expect(first.style.marginBlock).toBe("17px");
+    expect(source.getAttribute("style")).toBe(originalSourceStyle);
+
+    const secondSource = document.createElement("p");
+    secondSource.textContent = "Readable future appearance paragraph";
+    document.body.append(secondSource);
+    const future = extractSegments(document, state)[0];
+    if (future === undefined) {
+      throw new Error("Future appearance fixture was not extracted.");
+    }
+    const second = renderTranslation(
+      future,
+      {
+        id: future.segment.id,
+        status: "success",
+        translatedText: "Future translation",
+      },
+      state,
+      true,
+      { locale: "en", appearance: custom },
+    );
+    expect(second.style.fontSize).toBe("21px");
+    expect(secondSource.getAttribute("style")).toBeNull();
   });
 });
 
@@ -253,6 +397,36 @@ describe("translation visibility and cleanup", () => {
     expect(document.querySelector("#host-node")).not.toBeNull();
     expect(source.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(false);
     expect(document.body.innerHTML).toBe(original);
+  });
+
+  it("cleans up retry listeners and excludes owned retry UI from extraction", () => {
+    document.body.innerHTML = `<p>Readable cleanup retry paragraph</p>`;
+    const state = createContentRuntimeState({ runtimeId: "retry-cleanup" });
+    const extracted = extractSegments(document, state)[0];
+    const onRetry = vi.fn();
+    if (extracted === undefined) {
+      throw new Error("Retry cleanup fixture was not extracted.");
+    }
+    const translation = renderTranslation(
+      extracted,
+      {
+        id: extracted.segment.id,
+        status: "failure",
+        error: createError("NETWORK_ERROR"),
+      },
+      state,
+      true,
+      { locale: "en", onRetry },
+    );
+    const button = translation.querySelector<HTMLButtonElement>("button");
+    if (button === null) {
+      throw new Error("Retry button was not rendered.");
+    }
+
+    expect(extractSegments(document, state)).toHaveLength(0);
+    expect(clearTranslations(document, state)).toBe(1);
+    button.click();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 
   it("never trusts or mutates host nodes with spoofed ownership attributes", () => {

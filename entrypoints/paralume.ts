@@ -5,5 +5,6 @@ export default defineUnlistedScript(() => {
     document,
     globalObject: globalThis,
     runtime: browser.runtime,
+    getBrowserUiLanguage: () => browser.i18n.getUILanguage(),
   });
 });

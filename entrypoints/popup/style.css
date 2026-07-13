@@ -61,6 +61,18 @@ h1 {
   margin: 0 0 16px;
 }
 
+.page-state {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid #dbe3de;
+  border-radius: 10px;
+  background: #f8faf8;
+  color: #486257;
+  font-size: 0.78rem;
+}
+
 button {
   min-height: 42px;
   padding: 10px 14px;
@@ -130,6 +142,12 @@ button:disabled {
   .status {
     border-color: #3b5147;
     background: #22322b;
+  }
+
+  .page-state {
+    border-color: #40564c;
+    background: #1d2a24;
+    color: #bdd0c6;
   }
 
   button.secondary {

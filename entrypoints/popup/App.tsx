@@ -1,15 +1,32 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import {
+  formatDescriptor,
+  formatMessage,
+  resolveUiLocale,
+  translateError,
+  type MessageDescriptor,
+} from "../../src/localization";
 import type {
   ContentCommand,
   ContentResponse,
 } from "../../src/messaging/protocol";
-import { runPageCommand } from "../../src/popup/client";
+import {
+  loadPopupContentSettings,
+  runPageCommand,
+} from "../../src/popup/client";
+import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  DEFAULT_RETRY_SETTINGS,
+} from "../../src/settings/repository";
+import type { ContentSettings } from "../../src/settings/types";
+import { sanitizeError, type ErrorCode } from "../../src/shared/errors";
 import type { ContentState } from "../../src/shared/types";
-import { sanitizeStructuredError } from "../../src/shared/errors";
 
 export interface AppProps {
   runCommand?: (command: ContentCommand) => Promise<ContentResponse>;
+  loadContentSettings?: () => Promise<ContentSettings>;
+  getBrowserUiLanguage?: () => string | undefined;
 }
 
 const INITIAL_STATE: ContentState = {
@@ -18,18 +35,75 @@ const INITIAL_STATE: ContentState = {
   visible: true,
 };
 
-export function App({ runCommand = runPageCommand }: AppProps) {
+function defaults(): ContentSettings {
+  return {
+    retry: { ...DEFAULT_RETRY_SETTINGS },
+    appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
+    uiLanguage: "system",
+  };
+}
+
+function browserUiLanguage(): string | undefined {
+  try {
+    return browser.i18n.getUILanguage();
+  } catch {
+    return undefined;
+  }
+}
+
+function readBrowserUiLanguage(
+  getter: () => string | undefined,
+): string | undefined {
+  try {
+    return getter();
+  } catch {
+    return undefined;
+  }
+}
+
+export function App({
+  runCommand = runPageCommand,
+  loadContentSettings = loadPopupContentSettings,
+  getBrowserUiLanguage = browserUiLanguage,
+}: AppProps) {
+  const [preferences, setPreferences] = useState(defaults);
   const [busy, setBusy] = useState(false);
   const [pageState, setPageState] = useState(INITIAL_STATE);
-  const [status, setStatus] = useState(
-    "Ready to translate eligible text on the current page.",
+  const [status, setStatus] = useState<MessageDescriptor>({
+    id: "popup.ready",
+  });
+  const [error, setError] = useState<ErrorCode | null>(null);
+  const locale = resolveUiLocale(
+    preferences.uiLanguage,
+    readBrowserUiLanguage(getBrowserUiLanguage),
   );
-  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void loadContentSettings().then(
+      (loaded) => {
+        if (active) {
+          setPreferences(loaded);
+        }
+      },
+      () => undefined,
+    );
+    return () => {
+      active = false;
+    };
+  }, [loadContentSettings]);
 
   const handleAction = async (command: ContentCommand) => {
     setBusy(true);
     setError(null);
-    setStatus("Working on the current page…");
+    setStatus({
+      id:
+        command === "translate"
+          ? "popup.translating"
+          : command === "toggle"
+            ? "popup.toggling"
+            : "popup.clearing",
+    });
 
     try {
       const response = await runCommand(command);
@@ -37,33 +111,37 @@ export function App({ runCommand = runPageCommand }: AppProps) {
         setPageState(response.state);
         setStatus(response.message);
       } else {
-        setError(sanitizeStructuredError(response.error).message);
+        setError(response.error.code);
       }
-    } catch {
-      setStatus("The page action did not complete.");
-      setError("Paralume could not complete this action. Try again.");
+    } catch (caught) {
+      setError(sanitizeError(caught).code);
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <main className="popup" aria-labelledby="popup-title" aria-busy={busy}>
-      <p className="eyebrow">Local-first bilingual reading</p>
+    <main
+      className="popup"
+      aria-labelledby="popup-title"
+      aria-busy={busy}
+      lang={locale}
+    >
+      <p className="eyebrow">{formatMessage(locale, "popup.title")}</p>
       <h1 id="popup-title">Paralume</h1>
-      <p className="summary">
-        Add translations from your selected provider below readable blocks on
-        this page.
-      </p>
+      <p className="summary">{formatMessage(locale, "popup.description")}</p>
 
-      <div className="actions" aria-label="Page translation controls">
+      <div
+        className="actions"
+        aria-label={formatMessage(locale, "popup.title")}
+      >
         <button
           type="button"
           data-action="translate"
           disabled={busy}
           onClick={() => void handleAction("translate")}
         >
-          Translate current page
+          {formatMessage(locale, "popup.translate")}
         </button>
         <button
           type="button"
@@ -72,7 +150,7 @@ export function App({ runCommand = runPageCommand }: AppProps) {
           disabled={busy}
           onClick={() => void handleAction("toggle")}
         >
-          {pageState.visible ? "Hide" : "Show"} translations
+          {formatMessage(locale, "popup.toggle")}
         </button>
         <button
           type="button"
@@ -81,16 +159,35 @@ export function App({ runCommand = runPageCommand }: AppProps) {
           disabled={busy}
           onClick={() => void handleAction("clear")}
         >
-          Clear translations
+          {formatMessage(locale, "popup.clear")}
         </button>
       </div>
 
+      <div className="page-state" data-testid="page-state">
+        <span>
+          {formatMessage(locale, "popup.translated", {
+            count: pageState.translationCount,
+          })}
+        </span>
+        <span>
+          {formatMessage(locale, "popup.failures", {
+            count: pageState.failureCount,
+          })}
+        </span>
+        <span>
+          {formatMessage(
+            locale,
+            pageState.visible ? "popup.visible" : "popup.hidden",
+          )}
+        </span>
+      </div>
+
       <p className="status" role="status">
-        {status}
+        {formatDescriptor(locale, status)}
       </p>
       {error === null ? null : (
         <p className="error" role="alert">
-          {error}
+          {translateError(locale, error)}
         </p>
       )}
     </main>

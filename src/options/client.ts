@@ -5,6 +5,7 @@ import {
   createTestConnectionMessage,
   parseSettingsResponse,
 } from "../messaging/settings-protocol";
+import type { MessageDescriptor } from "../localization";
 import {
   requestProviderOriginPermission,
   removeStaleProviderOriginPermission,
@@ -25,7 +26,7 @@ export interface OptionsRuntimeApi {
 
 export interface OptionsActionResult {
   settings: PublicProviderSettings;
-  message: string;
+  message: MessageDescriptor;
 }
 
 export interface OptionsClient {
@@ -54,6 +55,9 @@ function publicAsStored(settings: PublicProviderSettings): ProviderSettings {
       endpoint: settings.microsoft.endpoint,
       region: settings.microsoft.region,
     },
+    retry: { ...settings.retry },
+    appearance: { ...settings.appearance },
+    uiLanguage: settings.uiLanguage,
   };
 }
 
@@ -101,6 +105,9 @@ export function createOptionsClient(
           endpoint: validated.microsoft.endpoint,
           region: validated.microsoft.region,
         },
+        retry: { ...validated.retry },
+        appearance: { ...validated.appearance },
+        uiLanguage: validated.uiLanguage,
       };
       const result = await send(
         createSaveSettingsMessage(normalizedDraft, replacements),
@@ -113,8 +120,7 @@ export function createOptionsClient(
       if (removal === "failed") {
         return {
           settings: result.settings,
-          message:
-            "Provider settings were saved, but the previous provider permission could not be removed. Remove it from the browser extension settings.",
+          message: { id: "settings.permissionRemovalFailed" },
         };
       }
       return result;

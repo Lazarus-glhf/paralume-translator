@@ -1,4 +1,4 @@
-import { createError } from "../shared/errors";
+import { createError, UserFacingError } from "../shared/errors";
 import {
   createContentCommand,
   createErrorResponse,
@@ -6,6 +6,11 @@ import {
   type ContentResponse,
 } from "../messaging/protocol";
 import { parseContentResponse } from "../messaging/validation";
+import {
+  createGetContentSettingsMessage,
+  parseContentSettingsResponse,
+} from "../messaging/settings-protocol";
+import type { ContentSettings } from "../settings/types";
 
 export interface PopupTab {
   id?: number;
@@ -88,4 +93,24 @@ export async function runPageCommand(
   } catch {
     return createErrorResponse(createError("INJECTION_FAILED"));
   }
+}
+
+export interface PopupSettingsRuntime {
+  sendMessage(message: unknown): Promise<unknown>;
+}
+
+export async function loadPopupContentSettings(
+  runtime?: PopupSettingsRuntime,
+): Promise<ContentSettings> {
+  const activeRuntime = runtime ?? browser.runtime;
+  const parsed = parseContentSettingsResponse(
+    await activeRuntime.sendMessage(createGetContentSettingsMessage()),
+  );
+  if (!parsed.ok) {
+    throw new UserFacingError(parsed.error.code);
+  }
+  if (!parsed.value.ok) {
+    throw new UserFacingError(parsed.value.error.code);
+  }
+  return parsed.value.contentSettings;
 }

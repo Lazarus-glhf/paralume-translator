@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_APPEARANCE_SETTINGS,
   DEFAULT_PROVIDER_SETTINGS,
+  DEFAULT_RETRY_SETTINGS,
   SETTINGS_STORAGE_KEY,
   createSettingsRepository,
   type SettingsStorageArea,
 } from "../src/settings/repository";
 import {
   deriveHttpsOriginPattern,
+  validateAppearanceSettings,
   validateProviderSettingsDraft,
 } from "../src/settings/validation";
 import type { ProviderSettingsDraft } from "../src/settings/types";
@@ -42,6 +45,17 @@ const validDraft: ProviderSettingsDraft = {
     endpoint: "https://api.cognitive.microsofttranslator.com/",
     region: "eastasia",
   },
+  retry: { enabled: true, maxRetries: 2 },
+  appearance: {
+    fontFamily: "system",
+    fontSize: 16,
+    textColor: "#456257",
+    backgroundColor: "#f4f8f5",
+    lineHeight: 1.6,
+    opacity: 1,
+    verticalSpacing: 8,
+  },
+  uiLanguage: "system",
 };
 
 describe("provider settings validation", () => {
@@ -87,6 +101,42 @@ describe("provider settings validation", () => {
       }),
     ).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
   });
+
+  it("normalizes safe appearance values and clamps every bounded number", () => {
+    expect(
+      validateAppearanceSettings({
+        fontFamily: "serif",
+        fontSize: 100,
+        textColor: "#AbC",
+        backgroundColor: "#FfFfFf",
+        lineHeight: 0.1,
+        opacity: 10,
+        verticalSpacing: -20,
+      }),
+    ).toEqual({
+      fontFamily: "serif",
+      fontSize: 32,
+      textColor: "#aabbcc",
+      backgroundColor: "#ffffff",
+      lineHeight: 1,
+      opacity: 1,
+      verticalSpacing: 0,
+    });
+  });
+
+  it.each([
+    { fontFamily: "serif; color: red" },
+    { textColor: "red" },
+    { backgroundColor: "url(https://attacker.invalid/pixel)" },
+    { opacity: Number.NaN },
+  ])("rejects unsafe appearance input: %j", (override) => {
+    expect(() =>
+      validateAppearanceSettings({
+        ...DEFAULT_APPEARANCE_SETTINGS,
+        ...override,
+      } as never),
+    ).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
+  });
 });
 
 describe("versioned settings repository", () => {
@@ -95,11 +145,64 @@ describe("versioned settings repository", () => {
 
     await expect(repository.load()).resolves.toEqual(DEFAULT_PROVIDER_SETTINGS);
     await expect(repository.loadPublic()).resolves.toMatchObject({
-      version: 1,
+      version: 2,
       provider: "mock",
+      retry: DEFAULT_RETRY_SETTINGS,
+      appearance: DEFAULT_APPEARANCE_SETTINGS,
+      uiLanguage: "system",
       openai: { apiKeyConfigured: false },
       microsoft: { apiKeyConfigured: false },
     });
+  });
+
+  it("migrates v1 settings in place while preserving provider configuration and API keys", async () => {
+    const storage = createStorage({
+      version: 1,
+      provider: "microsoft",
+      openai: {
+        baseUrl: "https://compatible.example/v1",
+        model: "kept-model",
+        protocol: "chat-completions",
+        reasoningEffort: "medium",
+        apiKey: "kept-openai-key",
+      },
+      microsoft: {
+        endpoint: "https://translator.example",
+        region: "eastasia",
+        apiKey: "kept-microsoft-key",
+      },
+    });
+    const repository = createSettingsRepository(storage);
+
+    await expect(repository.load()).resolves.toEqual({
+      version: 2,
+      provider: "microsoft",
+      openai: {
+        baseUrl: "https://compatible.example/v1",
+        model: "kept-model",
+        protocol: "chat-completions",
+        reasoningEffort: "medium",
+        apiKey: "kept-openai-key",
+      },
+      microsoft: {
+        endpoint: "https://translator.example",
+        region: "eastasia",
+        apiKey: "kept-microsoft-key",
+      },
+      retry: DEFAULT_RETRY_SETTINGS,
+      appearance: DEFAULT_APPEARANCE_SETTINGS,
+      uiLanguage: "system",
+    });
+    expect(storage.set).toHaveBeenCalledOnce();
+
+    const publicSettings = await repository.loadPublic();
+    expect(publicSettings).toMatchObject({
+      version: 2,
+      openai: { apiKeyConfigured: true },
+      microsoft: { apiKeyConfigured: true },
+    });
+    expect(JSON.stringify(publicSettings)).not.toContain("kept-openai-key");
+    expect(JSON.stringify(publicSettings)).not.toContain("kept-microsoft-key");
   });
 
   it("stores keys but never exposes them through the public settings view", async () => {

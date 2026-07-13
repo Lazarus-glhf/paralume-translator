@@ -6,22 +6,66 @@ import { App as OptionsApp } from "../entrypoints/options/App";
 import { App as PopupApp } from "../entrypoints/popup/App";
 import type { ContentResponse } from "../src/messaging/protocol";
 import type { OptionsClient } from "../src/options/client";
-import { DEFAULT_PROVIDER_SETTINGS } from "../src/settings/repository";
-import type { PublicProviderSettings } from "../src/settings/types";
+import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  DEFAULT_PROVIDER_SETTINGS,
+  DEFAULT_RETRY_SETTINGS,
+} from "../src/settings/repository";
+import type {
+  ContentSettings,
+  PublicProviderSettings,
+} from "../src/settings/types";
 
 const mountedRoots: Root[] = [];
 
 function render(ui: ReactNode) {
   const container = document.createElement("div");
   document.body.append(container);
-
   const root = createRoot(container);
   mountedRoots.push(root);
   act(() => {
     root.render(ui);
   });
-
   return container;
+}
+
+async function flushEffects(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function contentSettings(
+  overrides: Partial<ContentSettings> = {},
+): ContentSettings {
+  return {
+    retry: { ...DEFAULT_RETRY_SETTINGS },
+    appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
+    uiLanguage: "system",
+    ...overrides,
+  };
+}
+
+function publicSettings(
+  overrides: Partial<PublicProviderSettings> = {},
+): PublicProviderSettings {
+  return {
+    version: 2,
+    provider: "openai",
+    openai: {
+      ...DEFAULT_PROVIDER_SETTINGS.openai,
+      apiKeyConfigured: true,
+    },
+    microsoft: {
+      ...DEFAULT_PROVIDER_SETTINGS.microsoft,
+      apiKeyConfigured: false,
+    },
+    retry: { ...DEFAULT_RETRY_SETTINGS },
+    appearance: { ...DEFAULT_APPEARANCE_SETTINGS },
+    uiLanguage: "system",
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -30,12 +74,11 @@ afterEach(() => {
       root.unmount();
     });
   }
-
   document.body.replaceChildren();
 });
 
-describe("extension UI", () => {
-  it("runs accessible popup actions and reflects page visibility/status", async () => {
+describe("localized Popup", () => {
+  it("runs accessible English actions and formats stable status identifiers", async () => {
     const runCommand = vi.fn(
       (command: "translate" | "toggle" | "clear"): Promise<ContentResponse> =>
         Promise.resolve({
@@ -48,56 +91,107 @@ describe("extension UI", () => {
           },
           message:
             command === "translate"
-              ? "Translated 2 readable blocks."
+              ? {
+                  id: "content.translationSummary",
+                  values: { succeeded: 2, failed: 0 },
+                }
               : command === "toggle"
-                ? "Translations hidden."
-                : "Cleared 2 translations.",
+                ? { id: "content.hidden" }
+                : { id: "content.cleared", values: { count: 2 } },
         }),
     );
-    const popup = render(<PopupApp runCommand={runCommand} />);
+    const popup = render(
+      <PopupApp
+        runCommand={runCommand}
+        loadContentSettings={() => Promise.resolve(contentSettings())}
+        getBrowserUiLanguage={() => "en-US"}
+      />,
+    );
+    await flushEffects();
+
     const translate = popup.querySelector<HTMLButtonElement>(
       'button[data-action="translate"]',
     );
     const toggle = popup.querySelector<HTMLButtonElement>(
       'button[data-action="toggle"]',
     );
-
     expect(popup.querySelector("h1")?.textContent).toBe("Paralume");
     expect(popup.querySelectorAll("button")).toHaveLength(3);
-    expect(toggle?.textContent).toContain("Hide translations");
+    expect(translate?.textContent).toBe("Translate page");
 
     await act(async () => {
-      translate?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      translate?.click();
       await Promise.resolve();
     });
     expect(runCommand).toHaveBeenCalledWith("translate");
     expect(popup.querySelector('[role="status"]')?.textContent).toContain(
       "Translated 2 readable blocks",
     );
+    expect(popup.textContent).toContain("Translations: 2");
 
     await act(async () => {
-      toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      toggle?.click();
       await Promise.resolve();
     });
     expect(runCommand).toHaveBeenCalledWith("toggle");
-    expect(toggle?.textContent).toContain("Show translations");
+    expect(popup.textContent).toContain("Translations are hidden.");
   });
 
-  it("disables all popup actions and exposes aria-busy while a command is pending", async () => {
-    let resolveCommand: ((response: ContentResponse) => void) | undefined;
-    const runCommand = vi.fn(
-      () =>
-        new Promise<ContentResponse>((resolve) => {
-          resolveCommand = resolve;
-        }),
+  it("renders Simplified Chinese controls and fixed errors from the configured locale", async () => {
+    const popup = render(
+      <PopupApp
+        loadContentSettings={() =>
+          Promise.resolve(contentSettings({ uiLanguage: "zh-CN" }))
+        }
+        getBrowserUiLanguage={() => "en-US"}
+        runCommand={() =>
+          Promise.resolve({
+            protocolVersion: 1,
+            ok: false,
+            error: {
+              code: "RESTRICTED_PAGE",
+              message: "English protocol fallback must not drive the UI.",
+              retryable: false,
+            },
+          })
+        }
+      />,
     );
-    const popup = render(<PopupApp runCommand={runCommand} />);
-    const translate = popup.querySelector<HTMLButtonElement>(
-      'button[data-action="translate"]',
+    await flushEffects();
+
+    expect(popup.textContent).toContain("翻译页面");
+    expect(popup.textContent).toContain("显示 / 隐藏");
+    await act(async () => {
+      popup
+        .querySelector<HTMLButtonElement>('button[data-action="translate"]')
+        ?.click();
+      await Promise.resolve();
+    });
+    expect(popup.querySelector('[role="alert"]')?.textContent).toContain(
+      "浏览器内部页面",
     );
+    expect(popup.textContent).not.toContain("English protocol fallback");
+  });
+
+  it("disables actions while pending and recovers from an unexpected rejection", async () => {
+    let rejectCommand: ((error: Error) => void) | undefined;
+    const popup = render(
+      <PopupApp
+        loadContentSettings={() => Promise.resolve(contentSettings())}
+        getBrowserUiLanguage={() => "en-US"}
+        runCommand={() =>
+          new Promise<ContentResponse>((_resolve, reject) => {
+            rejectCommand = reject;
+          })
+        }
+      />,
+    );
+    await flushEffects();
 
     act(() => {
-      translate?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      popup
+        .querySelector<HTMLButtonElement>('button[data-action="translate"]')
+        ?.click();
     });
     expect(popup.querySelector("main")?.getAttribute("aria-busy")).toBe("true");
     expect(
@@ -105,107 +199,35 @@ describe("extension UI", () => {
         (button) => button.disabled,
       ),
     ).toBe(true);
+    expect(popup.textContent).toContain("Translating…");
 
     await act(async () => {
-      resolveCommand?.({
-        protocolVersion: 1,
-        ok: true,
-        state: { translationCount: 1, failureCount: 0, visible: true },
-        message: "Translated 1 readable block.",
-      });
+      rejectCommand?.(new Error("LEAK_SECRET_popup"));
       await Promise.resolve();
     });
+    expect(popup.querySelector('[role="alert"]')?.textContent).toBe(
+      "Paralume could not complete the request.",
+    );
+    expect(popup.textContent).not.toContain("LEAK_SECRET_popup");
     expect(popup.querySelector("main")?.getAttribute("aria-busy")).toBe(
       "false",
     );
   });
+});
 
-  it("announces popup errors without replacing the status region", async () => {
-    const popup = render(
-      <PopupApp
-        runCommand={() =>
-          Promise.resolve({
-            protocolVersion: 1,
-            ok: false,
-            error: {
-              code: "RESTRICTED_PAGE",
-              message: "Paralume cannot run on browser-internal pages.",
-              retryable: false,
-            },
-          })
-        }
-      />,
-    );
-
-    await act(async () => {
-      popup
-        .querySelector<HTMLButtonElement>('button[data-action="translate"]')
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await Promise.resolve();
-    });
-
-    expect(popup.querySelector('[role="alert"]')?.textContent).toContain(
-      "browser-internal",
-    );
-    expect(popup.querySelector('[role="status"]')).not.toBeNull();
-  });
-
-  it("announces an unexpected command rejection and leaves the UI usable", async () => {
-    const popup = render(
-      <PopupApp
-        runCommand={() => Promise.reject(new Error("Unexpected failure"))}
-      />,
-    );
-
-    await act(async () => {
-      popup
-        .querySelector<HTMLButtonElement>('button[data-action="translate"]')
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await Promise.resolve();
-    });
-
-    expect(popup.querySelector('[role="alert"]')?.textContent).toContain(
-      "could not complete",
-    );
-    expect(popup.querySelector("main")?.getAttribute("aria-busy")).toBe(
-      "false",
-    );
-    expect(
-      Array.from(popup.querySelectorAll<HTMLButtonElement>("button")).every(
-        (button) => !button.disabled,
-      ),
-    ).toBe(true);
-  });
-
-  it("loads configured credentials as masked, empty inputs", async () => {
-    const loadedSettings: PublicProviderSettings = {
-      version: 1,
-      provider: "openai",
-      openai: {
-        baseUrl: DEFAULT_PROVIDER_SETTINGS.openai.baseUrl,
-        model: DEFAULT_PROVIDER_SETTINGS.openai.model,
-        protocol: DEFAULT_PROVIDER_SETTINGS.openai.protocol,
-        reasoningEffort: DEFAULT_PROVIDER_SETTINGS.openai.reasoningEffort,
-        apiKeyConfigured: true,
-      },
-      microsoft: {
-        endpoint: DEFAULT_PROVIDER_SETTINGS.microsoft.endpoint,
-        region: DEFAULT_PROVIDER_SETTINGS.microsoft.region,
-        apiKeyConfigured: false,
-      },
-    };
+describe("localized Options", () => {
+  it("loads configured credentials as masked empty inputs and renders all Milestone 3 controls", async () => {
+    const loaded = publicSettings();
     const client: OptionsClient = {
-      load: vi.fn(() => Promise.resolve(loadedSettings)),
+      load: vi.fn(() => Promise.resolve(loaded)),
       save: vi.fn(),
       clearApiKey: vi.fn(),
       testConnection: vi.fn(),
     };
-    const options = render(<OptionsApp client={client} />);
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    const options = render(
+      <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,
+    );
+    await flushEffects();
 
     const keyInput = options.querySelector<HTMLInputElement>(
       'input[name="openaiApiKey"]',
@@ -214,103 +236,145 @@ describe("extension UI", () => {
     expect(keyInput?.type).toBe("password");
     expect(keyInput?.value).toBe("");
     expect(keyInput?.placeholder).toContain("configured");
+    expect(options.querySelector('select[name="uiLanguage"]')).not.toBeNull();
+    expect(options.querySelector('input[name="retryEnabled"]')).not.toBeNull();
+    expect(
+      options.querySelector('select[name="retryMaxRetries"]'),
+    ).not.toBeNull();
+    expect(
+      options.querySelector('select[name="appearanceFontFamily"]'),
+    ).not.toBeNull();
+    expect(
+      options.querySelector('input[name="appearanceFontSize"]'),
+    ).not.toBeNull();
+    expect(
+      options.querySelector('input[name="appearanceTextColor"]'),
+    ).not.toBeNull();
+    expect(
+      options.querySelector('input[name="appearanceBackgroundColor"]'),
+    ).not.toBeNull();
+    expect(
+      options.querySelector('input[name="appearanceLineHeight"]'),
+    ).not.toBeNull();
+    expect(
+      options.querySelector('input[name="appearanceOpacity"]'),
+    ).not.toBeNull();
+    expect(
+      options.querySelector('input[name="appearanceVerticalSpacing"]'),
+    ).not.toBeNull();
     expect(options.textContent).not.toContain("background-only-test-key");
   });
 
-  it("submits replacement keys, reports save status, and clears them explicitly", async () => {
-    const publicSettings = {
-      version: 1 as const,
-      provider: "openai" as const,
-      openai: {
-        ...DEFAULT_PROVIDER_SETTINGS.openai,
-        apiKeyConfigured: false,
+  it("switches immediately to Simplified Chinese and resets appearance safely", async () => {
+    const loaded = publicSettings({
+      uiLanguage: "zh-CN",
+      appearance: {
+        ...DEFAULT_APPEARANCE_SETTINGS,
+        fontSize: 24,
+        opacity: 0.6,
       },
-      microsoft: {
-        ...DEFAULT_PROVIDER_SETTINGS.microsoft,
-        apiKeyConfigured: false,
-      },
+    });
+    const client: OptionsClient = {
+      load: vi.fn(() => Promise.resolve(loaded)),
+      save: vi.fn(),
+      clearApiKey: vi.fn(),
+      testConnection: vi.fn(),
+    };
+    const options = render(
+      <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,
+    );
+    await flushEffects();
+
+    expect(options.querySelector("h1")?.textContent).toBe("选项");
+    expect(options.textContent).toContain("自动重试");
+    expect(options.textContent).toContain("外观");
+    expect(options.textContent).toContain("保存设置");
+    act(() => {
+      options
+        .querySelector<HTMLButtonElement>(
+          'button[data-action="reset-appearance"]',
+        )
+        ?.click();
+    });
+    expect(
+      options.querySelector<HTMLInputElement>(
+        'input[name="appearanceFontSize"]',
+      )?.value,
+    ).toBe(String(DEFAULT_APPEARANCE_SETTINGS.fontSize));
+    expect(
+      options.querySelector<HTMLInputElement>('input[name="appearanceOpacity"]')
+        ?.value,
+    ).toBe(String(DEFAULT_APPEARANCE_SETTINGS.opacity));
+  });
+
+  it("submits retry, appearance, language, and replacement keys with localized status", async () => {
+    const loaded = publicSettings();
+    const saved = {
+      ...loaded,
+      openai: { ...loaded.openai, apiKeyConfigured: true },
+      uiLanguage: "zh-CN" as const,
     };
     const client: OptionsClient = {
-      load: vi.fn(() => Promise.resolve(publicSettings)),
+      load: vi.fn(() => Promise.resolve(loaded)),
       save: vi.fn(() =>
         Promise.resolve({
-          settings: {
-            ...publicSettings,
-            openai: { ...publicSettings.openai, apiKeyConfigured: true },
-          },
-          message: "Settings saved.",
+          settings: saved,
+          message: { id: "settings.saved" as const },
         }),
       ),
       clearApiKey: vi.fn(() =>
         Promise.resolve({
-          settings: publicSettings,
-          message: "OpenAI-compatible API key cleared.",
+          settings: loaded,
+          message: { id: "settings.openAiKeyCleared" as const },
         }),
       ),
       testConnection: vi.fn(),
     };
-    const options = render(<OptionsApp client={client} />);
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    const options = render(
+      <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,
+    );
+    await flushEffects();
 
-    const keyInput = options.querySelector<HTMLInputElement>(
-      'input[name="openaiApiKey"]',
+    const setInput = (selector: string, value: string) => {
+      const input = options.querySelector<HTMLInputElement>(selector);
+      if (input !== null) {
+        Reflect.set(HTMLInputElement.prototype, "value", value, input);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    };
+    const language = options.querySelector<HTMLSelectElement>(
+      'select[name="uiLanguage"]',
     );
     await act(async () => {
-      if (keyInput !== null) {
-        Reflect.set(
-          HTMLInputElement.prototype,
-          "value",
-          "replacement-test-key",
-          keyInput,
-        );
-        keyInput.dispatchEvent(new Event("input", { bubbles: true }));
+      setInput('input[name="openaiApiKey"]', "replacement-test-key");
+      setInput('input[name="appearanceFontSize"]', "22");
+      if (language !== null) {
+        Reflect.set(HTMLSelectElement.prototype, "value", "zh-CN", language);
+        language.dispatchEvent(new Event("change", { bubbles: true }));
       }
       options
         .querySelector<HTMLButtonElement>('button[data-action="save"]')
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        ?.click();
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(client.save).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai" }),
-      { openaiApiKey: "replacement-test-key" },
-    );
-    expect(options.querySelector('[role="status"]')?.textContent).toContain(
-      "Settings saved",
-    );
-    expect(keyInput?.value).toBe("");
-
-    await act(async () => {
-      options
-        .querySelector<HTMLButtonElement>(
-          'button[data-action="clear-openai-key"]',
-        )
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await Promise.resolve();
-      await Promise.resolve();
+    const submitted = vi.mocked(client.save).mock.calls[0];
+    expect(submitted?.[0].uiLanguage).toBe("zh-CN");
+    expect(submitted?.[0].retry).toEqual({ enabled: true, maxRetries: 2 });
+    expect(submitted?.[0].appearance.fontSize).toBe(22);
+    expect(submitted?.[1]).toEqual({
+      openaiApiKey: "replacement-test-key",
     });
-    expect(client.clearApiKey).toHaveBeenCalledWith("openai");
+    expect(options.querySelector('[role="status"]')?.textContent).toBe(
+      "设置已保存。",
+    );
   });
 
-  it("does not render arbitrary Options client exception details", async () => {
-    const publicSettings = {
-      version: 1 as const,
-      provider: "mock" as const,
-      openai: {
-        ...DEFAULT_PROVIDER_SETTINGS.openai,
-        apiKeyConfigured: false,
-      },
-      microsoft: {
-        ...DEFAULT_PROVIDER_SETTINGS.microsoft,
-        apiKeyConfigured: false,
-      },
-    };
+  it("localizes safe validation errors without rendering arbitrary exception details", async () => {
+    const loaded = publicSettings({ provider: "mock", uiLanguage: "zh-CN" });
     const client: OptionsClient = {
-      load: vi.fn(() => Promise.resolve(publicSettings)),
+      load: vi.fn(() => Promise.resolve(loaded)),
       save: vi.fn(() =>
         Promise.reject(
           new Error(
@@ -321,22 +385,21 @@ describe("extension UI", () => {
       clearApiKey: vi.fn(),
       testConnection: vi.fn(),
     };
-    const options = render(<OptionsApp client={client} />);
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    const options = render(
+      <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,
+    );
+    await flushEffects();
 
     await act(async () => {
       options
         .querySelector<HTMLButtonElement>('button[data-action="save"]')
-        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        ?.click();
       await Promise.resolve();
       await Promise.resolve();
     });
 
     expect(options.querySelector('[role="alert"]')?.textContent).toBe(
-      "Paralume could not complete the request.",
+      "Paralume 无法完成该请求。",
     );
     expect(options.textContent).not.toMatch(
       /LEAK_SECRET|private\.invalid|LEAK_PAGE_TEXT/u,

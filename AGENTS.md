@@ -39,4 +39,11 @@ Do not add PDF/video/OCR support, accounts, cloud sync, payments, Firefox suppor
 - The first release accepts arbitrary HTTPS OpenAI-compatible endpoints. The manifest declares the ungranted `optional_host_permissions` pattern `https://*/*` so Chrome can later grant custom origins, but runtime code must request and use only the exact configured origin. Do not add broad granted `host_permissions`.
 - Store BYOK credentials in `chrome.storage.local`; only background/provider code may read keys. Options must mask and clear keys, and documentation must state that local storage is not an encrypted vault.
 - Microsoft Translator uses API Key + Region + configurable Endpoint, defaulting to `https://api.cognitive.microsofttranslator.com`.
-- OpenAI batch format errors fail the batch clearly. Do not automatically retry one request per segment in this milestone, but keep the provider design open to a future user-selectable fallback policy.
+- OpenAI batch format errors fail the batch clearly. Do not silently split malformed batches into per-segment requests.
+
+## Milestone 3 tester-usability decisions
+- Automatically retry only recoverable provider failures (`RATE_LIMITED`, `REQUEST_TIMEOUT`, `NETWORK_ERROR`, `SERVER_UNAVAILABLE`) up to two additional whole-batch attempts with bounded backoff. Do not retry permanent/configuration/structured-output failures automatically and never fall back to Mock.
+- Every rendered failed segment gets a subtle bottom-right manual Retry control. Manual retry submits only that segment, deduplicates clicks, shows pending state, and remains cancellation-safe.
+- Appearance settings affect only Paralume-owned translation/failure/retry UI, never source-page styling. Support font family, font size, text/background colors, line height, opacity, and vertical spacing with strict validation and safe defaults.
+- Localize Popup, Options, status/error messages, and page retry UI for Simplified Chinese and English. Language choices are system (default), zh-CN, and en. Add an independently maintained `README.zh-CN.md` linked with the English README.
+- Continue to keep React in Popup/Options only; retry policy, localization, appearance validation/application, messaging, and rendering remain framework-independent TypeScript where applicable.

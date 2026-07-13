@@ -13,6 +13,19 @@ const request: TranslationRequest = {
   ],
 };
 
+function deferred<T>() {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve(value: T) {
+      resolvePromise?.(value);
+    },
+  };
+}
+
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
@@ -343,6 +356,33 @@ describe("OpenAI-compatible translation provider", () => {
     );
   });
 
+  it("captures a safely bounded Retry-After hint without exposing response content", async () => {
+    const provider = new OpenAiTranslationProvider(
+      {
+        apiKey: "test-key",
+        baseUrl: "https://api.example.com/v1",
+        model: "model",
+        protocol: "responses",
+        reasoningEffort: "low",
+      },
+      {
+        fetch: () =>
+          Promise.resolve(
+            new Response('{"error":{"message":"sensitive upstream text"}}', {
+              status: 429,
+              headers: { "Retry-After": "120" },
+            }),
+          ),
+        now: () => Date.parse("2026-07-13T12:00:00.000Z"),
+      },
+    );
+
+    await expect(provider.translate(request)).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+      retryAfterMs: 30_000,
+    });
+  });
+
   it("maps malformed HTTP JSON to a fixed safe error", async () => {
     const provider = new OpenAiTranslationProvider(
       {
@@ -397,6 +437,169 @@ describe("OpenAI-compatible translation provider", () => {
     );
     await vi.advanceTimersByTimeAsync(25);
     await rejection;
+  });
+
+  it("aborts a long fetch from the caller signal and removes the forwarding listener", async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    const addListener = vi.spyOn(caller.signal, "addEventListener");
+    const removeListener = vi.spyOn(caller.signal, "removeEventListener");
+    let fetchSignal: AbortSignal | undefined;
+    const fetch = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          fetchSignal = init?.signal ?? undefined;
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const provider = new OpenAiTranslationProvider(
+      {
+        apiKey: "test-key",
+        baseUrl: "https://api.example.com/v1",
+        model: "model",
+        protocol: "responses",
+        reasoningEffort: "low",
+      },
+      { fetch, timeoutMs: 25 },
+    );
+
+    const rejection = expect(
+      provider.translate(request, { signal: caller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    caller.abort();
+    await vi.advanceTimersByTimeAsync(25);
+    await rejection;
+
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(addListener).toHaveBeenCalledOnce();
+    expect(removeListener).toHaveBeenCalled();
+  });
+
+  it("removes the caller abort listener after a successful fetch", async () => {
+    const caller = new AbortController();
+    const addListener = vi.spyOn(caller.signal, "addEventListener");
+    const removeListener = vi.spyOn(caller.signal, "removeEventListener");
+    const provider = new OpenAiTranslationProvider(
+      {
+        apiKey: "test-key",
+        baseUrl: "https://api.example.com/v1",
+        model: "model",
+        protocol: "responses",
+        reasoningEffort: "low",
+      },
+      {
+        fetch: () =>
+          Promise.resolve(
+            jsonResponse({
+              output_text: JSON.stringify({
+                translations: [
+                  { id: "segment-a", translatedText: "甲" },
+                  { id: "segment-b", translatedText: "乙" },
+                ],
+              }),
+            }),
+          ),
+      },
+    );
+
+    await provider.translate(request, { signal: caller.signal });
+
+    expect(addListener).toHaveBeenCalledOnce();
+    expect(removeListener).toHaveBeenCalledOnce();
+  });
+
+  it("keeps caller cancellation and timeout active while reading the response body", async () => {
+    const caller = new AbortController();
+    const jsonStarted = deferred<unknown>();
+    const jsonResult = deferred<unknown>();
+    let fetchSignal: AbortSignal | undefined;
+    const provider = new OpenAiTranslationProvider(
+      {
+        apiKey: "test-key",
+        baseUrl: "https://api.example.com/v1",
+        model: "model",
+        protocol: "responses",
+        reasoningEffort: "low",
+      },
+      {
+        fetch: (_url, init) => {
+          fetchSignal = init?.signal ?? undefined;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: new Headers(),
+            json() {
+              jsonStarted.resolve(undefined);
+              return jsonResult.promise;
+            },
+          } as Response);
+        },
+      },
+    );
+
+    const translating = provider.translate(request, { signal: caller.signal });
+    await jsonStarted.promise;
+    caller.abort();
+    jsonResult.resolve({
+      output_text: JSON.stringify({
+        translations: [
+          { id: "segment-a", translatedText: "甲" },
+          { id: "segment-b", translatedText: "乙" },
+        ],
+      }),
+    });
+
+    await expect(translating).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchSignal?.aborted).toBe(true);
+  });
+
+  it("applies the request timeout while reading the response body", async () => {
+    vi.useFakeTimers();
+    let fetchSignal: AbortSignal | undefined;
+    const provider = new OpenAiTranslationProvider(
+      {
+        apiKey: "test-key",
+        baseUrl: "https://api.example.com/v1",
+        model: "model",
+        protocol: "responses",
+        reasoningEffort: "low",
+      },
+      {
+        timeoutMs: 25,
+        fetch: (_url, init) => {
+          fetchSignal = init?.signal ?? undefined;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: new Headers(),
+            json() {
+              return new Promise((_resolve, reject) => {
+                fetchSignal?.addEventListener(
+                  "abort",
+                  () => {
+                    reject(new DOMException("Aborted", "AbortError"));
+                  },
+                  { once: true },
+                );
+              });
+            },
+          } as Response);
+        },
+      },
+    );
+
+    const rejection = expect(provider.translate(request)).rejects.toMatchObject(
+      { code: "REQUEST_TIMEOUT" },
+    );
+    await vi.advanceTimersByTimeAsync(25);
+    await rejection;
+    expect(fetchSignal?.aborted).toBe(true);
   });
 });
 

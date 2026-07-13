@@ -13,7 +13,10 @@ function createBrowser(overrides: Partial<PopupBrowser> = {}): PopupBrowser {
           protocolVersion: 1,
           ok: true,
           state: { translationCount: 2, failureCount: 0, visible: true },
-          message: "Translated 2 readable blocks.",
+          message: {
+            id: "content.translationSummary",
+            values: { succeeded: 2, failed: 0 },
+          },
         }),
       ),
     },

@@ -11,10 +11,15 @@ import type {
   TranslationProvider,
   TranslationProviderResolver,
 } from "./provider";
+import { createRetryingProvider, type RetryRuntimeDependencies } from "./retry";
 import { UserFacingError } from "../shared/errors";
 
 export interface ProviderSettingsReader {
   load(): Promise<ProviderSettings>;
+}
+
+export interface ProviderRegistryDependencies extends HttpProviderDependencies {
+  retry?: RetryRuntimeDependencies;
 }
 
 export function createConfiguredProvider(
@@ -46,13 +51,26 @@ export function createConfiguredProvider(
 export function createSettingsBackedProviderResolver(
   repository: ProviderSettingsReader,
   permissions: ProviderPermissionsApi,
-  dependencies: HttpProviderDependencies = {},
+  dependencies: ProviderRegistryDependencies = {},
 ): TranslationProviderResolver {
   return async () => {
     const settings = await repository.load();
     if (!(await hasProviderOriginPermission(settings, permissions))) {
       throw new UserFacingError("PERMISSION_MISSING");
     }
-    return createConfiguredProvider(settings, dependencies);
+    const providerDependencies: HttpProviderDependencies = {
+      ...(dependencies.fetch === undefined
+        ? {}
+        : { fetch: dependencies.fetch }),
+      ...(dependencies.timeoutMs === undefined
+        ? {}
+        : { timeoutMs: dependencies.timeoutMs }),
+      ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+    };
+    return createRetryingProvider(
+      createConfiguredProvider(settings, providerDependencies),
+      settings.retry,
+      dependencies.retry,
+    );
   };
 }

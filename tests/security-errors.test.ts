@@ -14,6 +14,8 @@ import type { PublicProviderSettings } from "../src/settings/types";
 import { DEFAULT_PROVIDER_SETTINGS } from "../src/settings/repository";
 import { translateInBatches } from "../src/translation/batcher";
 
+const operationId = "5175c2e7-6154-4503-86c4-2debb5fcb444";
+
 const LEAK_SENTINELS = [
   "LEAK_SECRET_7c1d",
   "https://private-provider.invalid/account/42",
@@ -35,7 +37,7 @@ function expectNoLeak(value: unknown): void {
 }
 
 const publicSettings: PublicProviderSettings = {
-  version: 1,
+  version: 2,
   provider: "mock",
   openai: {
     ...DEFAULT_PROVIDER_SETTINGS.openai,
@@ -45,6 +47,9 @@ const publicSettings: PublicProviderSettings = {
     ...DEFAULT_PROVIDER_SETTINGS.microsoft,
     apiKeyConfigured: false,
   },
+  retry: { ...DEFAULT_PROVIDER_SETTINGS.retry },
+  appearance: { ...DEFAULT_PROVIDER_SETTINGS.appearance },
+  uiLanguage: DEFAULT_PROVIDER_SETTINGS.uiLanguage,
 };
 
 describe("safe cross-runtime errors", () => {
@@ -81,35 +86,23 @@ describe("safe cross-runtime errors", () => {
     expectNoLeak(sanitized);
   });
 
-  it("sanitizes provider exceptions in every per-segment batch failure", async () => {
-    const results = await translateInBatches(
-      {
-        name: "hostile",
-        translate: () => Promise.reject(hostileError()),
-      },
-      {
-        sourceLanguage: "auto",
-        targetLanguage: "zh-CN",
-        segments: [
-          { id: "segment-a", text: "Sensitive source paragraph A." },
-          { id: "segment-b", text: "Sensitive source paragraph B." },
-        ],
-      },
-    );
-
-    expect(results).toEqual([
-      {
-        id: "segment-a",
-        status: "failure",
-        error: createError("TRANSLATION_FAILED"),
-      },
-      {
-        id: "segment-b",
-        status: "failure",
-        error: createError("TRANSLATION_FAILED"),
-      },
-    ]);
-    expectNoLeak(results);
+  it("keeps provider exceptions request-wide until the background boundary sanitizes them", async () => {
+    await expect(
+      translateInBatches(
+        {
+          name: "hostile",
+          translate: () => Promise.reject(hostileError()),
+        },
+        {
+          sourceLanguage: "auto",
+          targetLanguage: "zh-CN",
+          segments: [
+            { id: "segment-a", text: "Sensitive source paragraph A." },
+            { id: "segment-b", text: "Sensitive source paragraph B." },
+          ],
+        },
+      ),
+    ).rejects.toThrow();
   });
 
   it("sanitizes provider resolver exceptions in translation responses", async () => {
@@ -117,11 +110,14 @@ describe("safe cross-runtime errors", () => {
       Promise.reject(hostileError()),
     );
     const response = await handle(
-      createBackgroundTranslationMessage({
-        sourceLanguage: "auto",
-        targetLanguage: "zh-CN",
-        segments: [{ id: "segment-a", text: "Sensitive page paragraph." }],
-      }),
+      createBackgroundTranslationMessage(
+        {
+          sourceLanguage: "auto",
+          targetLanguage: "zh-CN",
+          segments: [{ id: "segment-a", text: "Sensitive page paragraph." }],
+        },
+        operationId,
+      ),
     );
 
     expect(response).toMatchObject({
@@ -131,9 +127,43 @@ describe("safe cross-runtime errors", () => {
     expectNoLeak(response);
   });
 
+  it("sanitizes request-wide provider exceptions without manufacturing segment results", async () => {
+    const handle = createBackgroundMessageHandler({
+      name: "hostile-provider",
+      translate: () => Promise.reject(hostileError()),
+    });
+    const response = await handle(
+      createBackgroundTranslationMessage(
+        {
+          sourceLanguage: "auto",
+          targetLanguage: "zh-CN",
+          segments: [
+            { id: "segment-a", text: "Sensitive page paragraph A." },
+            { id: "segment-b", text: "Sensitive page paragraph B." },
+          ],
+        },
+        operationId,
+      ),
+    );
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: createError("INTERNAL_ERROR"),
+    });
+    expect(response).not.toHaveProperty("results");
+    expectNoLeak(response);
+  });
+
   it("sanitizes settings repository and provider exceptions", async () => {
     const repository = {
       loadPublic: vi.fn(() => Promise.resolve(publicSettings)),
+      loadContent: vi.fn(() =>
+        Promise.resolve({
+          retry: publicSettings.retry,
+          appearance: publicSettings.appearance,
+          uiLanguage: publicSettings.uiLanguage,
+        }),
+      ),
       save: vi.fn(() => Promise.reject(hostileError())),
       clearApiKey: vi.fn(() => Promise.reject(hostileError())),
     };

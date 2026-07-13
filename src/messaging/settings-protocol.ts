@@ -1,8 +1,15 @@
+import {
+  isMessageId,
+  type MessageDescriptor,
+  type MessageValue,
+} from "../localization";
 import { createError } from "../shared/errors";
-import type {
-  ApiKeyReplacements,
-  ProviderSettingsDraft,
-  PublicProviderSettings,
+import {
+  PROVIDER_SETTINGS_VERSION,
+  type ApiKeyReplacements,
+  type ContentSettings,
+  type ProviderSettingsDraft,
+  type PublicProviderSettings,
 } from "../settings/types";
 import { validateProviderSettingsDraft } from "../settings/validation";
 import { PROTOCOL_VERSION, type ErrorResponse } from "./protocol";
@@ -12,6 +19,12 @@ export interface GetSettingsMessage {
   protocolVersion: typeof PROTOCOL_VERSION;
   target: "settings";
   command: "get";
+}
+
+export interface GetContentSettingsMessage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  target: "settings";
+  command: "get-content";
 }
 
 export interface SaveSettingsMessage {
@@ -37,6 +50,7 @@ export interface TestConnectionMessage {
 
 export type SettingsRequest =
   | GetSettingsMessage
+  | GetContentSettingsMessage
   | SaveSettingsMessage
   | ClearApiKeyMessage
   | TestConnectionMessage;
@@ -45,10 +59,19 @@ export interface SettingsSuccessResponse {
   protocolVersion: typeof PROTOCOL_VERSION;
   ok: true;
   settings: PublicProviderSettings;
-  message: string;
+  message: MessageDescriptor;
+}
+
+export interface ContentSettingsSuccessResponse {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  ok: true;
+  contentSettings: ContentSettings;
 }
 
 export type SettingsResponse = SettingsSuccessResponse | ErrorResponse;
+export type ContentSettingsResponse =
+  ContentSettingsSuccessResponse | ErrorResponse;
+export type AnySettingsResponse = SettingsResponse | ContentSettingsResponse;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -72,42 +95,49 @@ function parseDraft(value: unknown): ProviderSettingsDraft | undefined {
   if (
     !isRecord(value) ||
     !isRecord(value["openai"]) ||
-    !isRecord(value["microsoft"])
-  ) {
-    return undefined;
-  }
-  if (
-    !hasOnlyKeys(value, ["provider", "openai", "microsoft"]) ||
+    !isRecord(value["microsoft"]) ||
+    !isRecord(value["retry"]) ||
+    !isRecord(value["appearance"]) ||
+    !hasOnlyKeys(value, [
+      "provider",
+      "openai",
+      "microsoft",
+      "retry",
+      "appearance",
+      "uiLanguage",
+    ]) ||
     !hasOnlyKeys(value["openai"], [
       "baseUrl",
       "model",
       "protocol",
       "reasoningEffort",
     ]) ||
-    !hasOnlyKeys(value["microsoft"], ["endpoint", "region"])
+    !hasOnlyKeys(value["microsoft"], ["endpoint", "region"]) ||
+    !hasOnlyKeys(value["retry"], ["enabled", "maxRetries"]) ||
+    !hasOnlyKeys(value["appearance"], [
+      "fontFamily",
+      "fontSize",
+      "textColor",
+      "backgroundColor",
+      "lineHeight",
+      "opacity",
+      "verticalSpacing",
+    ])
   ) {
     return undefined;
   }
 
-  const draft = {
-    provider: value["provider"],
-    openai: value["openai"],
-    microsoft: value["microsoft"],
-  } as unknown as ProviderSettingsDraft;
   try {
-    const validated = validateProviderSettingsDraft(draft);
+    const validated = validateProviderSettingsDraft(
+      value as unknown as ProviderSettingsDraft,
+    );
     return {
       provider: validated.provider,
-      openai: {
-        baseUrl: validated.openai.baseUrl,
-        model: validated.openai.model,
-        protocol: validated.openai.protocol,
-        reasoningEffort: validated.openai.reasoningEffort,
-      },
-      microsoft: {
-        endpoint: validated.microsoft.endpoint,
-        region: validated.microsoft.region,
-      },
+      openai: { ...validated.openai },
+      microsoft: { ...validated.microsoft },
+      retry: { ...validated.retry },
+      appearance: { ...validated.appearance },
+      uiLanguage: validated.uiLanguage,
     };
   } catch {
     return undefined;
@@ -149,10 +179,18 @@ function parsePublicSettings(
 ): PublicProviderSettings | undefined {
   if (
     !isRecord(value) ||
-    value["version"] !== 1 ||
+    value["version"] !== PROVIDER_SETTINGS_VERSION ||
     !isRecord(value["openai"]) ||
     !isRecord(value["microsoft"]) ||
-    !hasOnlyKeys(value, ["version", "provider", "openai", "microsoft"]) ||
+    !hasOnlyKeys(value, [
+      "version",
+      "provider",
+      "openai",
+      "microsoft",
+      "retry",
+      "appearance",
+      "uiLanguage",
+    ]) ||
     !hasOnlyKeys(value["openai"], [
       "baseUrl",
       "model",
@@ -183,13 +221,16 @@ function parsePublicSettings(
       endpoint: value["microsoft"]["endpoint"],
       region: value["microsoft"]["region"],
     },
+    retry: value["retry"],
+    appearance: value["appearance"],
+    uiLanguage: value["uiLanguage"],
   });
   if (draft === undefined) {
     return undefined;
   }
 
   return {
-    version: 1,
+    version: PROVIDER_SETTINGS_VERSION,
     ...draft,
     openai: {
       ...draft.openai,
@@ -200,6 +241,68 @@ function parsePublicSettings(
       apiKeyConfigured: value["microsoft"]["apiKeyConfigured"],
     },
   };
+}
+
+function parseContentSettings(value: unknown): ContentSettings | undefined {
+  const defaults = {
+    provider: "mock" as const,
+    openai: {
+      baseUrl: "https://api.openai.com/v1",
+      model: "unused",
+      protocol: "responses" as const,
+      reasoningEffort: "low" as const,
+    },
+    microsoft: {
+      endpoint: "https://api.cognitive.microsofttranslator.com",
+      region: "unused",
+    },
+  };
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["retry", "appearance", "uiLanguage"])
+  ) {
+    return undefined;
+  }
+  const parsed = parseDraft({ ...defaults, ...value });
+  return parsed === undefined
+    ? undefined
+    : {
+        retry: parsed.retry,
+        appearance: parsed.appearance,
+        uiLanguage: parsed.uiLanguage,
+      };
+}
+
+function parseMessageValues(
+  value: unknown,
+): Readonly<Record<string, MessageValue>> | undefined {
+  if (!isRecord(value) || Object.keys(value).length > 20) {
+    return undefined;
+  }
+  for (const candidate of Object.values(value)) {
+    if (
+      (typeof candidate !== "string" && typeof candidate !== "number") ||
+      (typeof candidate === "string" && candidate.length > 2_000) ||
+      (typeof candidate === "number" && !Number.isFinite(candidate))
+    ) {
+      return undefined;
+    }
+  }
+  return value as Readonly<Record<string, MessageValue>>;
+}
+
+function parseMessageDescriptor(value: unknown): MessageDescriptor | undefined {
+  if (!isRecord(value) || !isMessageId(value["id"])) {
+    return undefined;
+  }
+  if (hasOnlyKeys(value, ["id"])) {
+    return { id: value["id"] };
+  }
+  if (!hasOnlyKeys(value, ["id", "values"])) {
+    return undefined;
+  }
+  const values = parseMessageValues(value["values"]);
+  return values === undefined ? undefined : { id: value["id"], values };
 }
 
 export function parseSettingsRequest(
@@ -215,6 +318,7 @@ export function parseSettingsRequest(
 
   switch (value["command"]) {
     case "get":
+    case "get-content":
     case "test-connection":
       return hasOnlyKeys(value, ["protocolVersion", "target", "command"])
         ? { ok: true, value: value as unknown as SettingsRequest }
@@ -258,25 +362,31 @@ export function parseSettingsRequest(
   }
 }
 
+function parseErrorResponse(value: unknown): ErrorResponse | undefined {
+  const possibleError = parseTranslationResponse(value);
+  return possibleError.ok && !possibleError.value.ok
+    ? possibleError.value
+    : undefined;
+}
+
 export function parseSettingsResponse(
   value: unknown,
 ): ValidationResult<SettingsResponse> {
-  const possibleError = parseTranslationResponse(value);
-  if (possibleError.ok && !possibleError.value.ok) {
-    return { ok: true, value: possibleError.value };
+  const error = parseErrorResponse(value);
+  if (error !== undefined) {
+    return { ok: true, value: error };
   }
   if (
     !isRecord(value) ||
     !hasOnlyKeys(value, ["protocolVersion", "ok", "settings", "message"]) ||
     value["protocolVersion"] !== PROTOCOL_VERSION ||
-    value["ok"] !== true ||
-    typeof value["message"] !== "string" ||
-    value["message"].trim() === ""
+    value["ok"] !== true
   ) {
     return invalid();
   }
   const settings = parsePublicSettings(value["settings"]);
-  return settings === undefined
+  const message = parseMessageDescriptor(value["message"]);
+  return settings === undefined || message === undefined
     ? invalid()
     : {
         ok: true,
@@ -284,7 +394,35 @@ export function parseSettingsResponse(
           protocolVersion: PROTOCOL_VERSION,
           ok: true,
           settings,
-          message: value["message"],
+          message,
+        },
+      };
+}
+
+export function parseContentSettingsResponse(
+  value: unknown,
+): ValidationResult<ContentSettingsResponse> {
+  const error = parseErrorResponse(value);
+  if (error !== undefined) {
+    return { ok: true, value: error };
+  }
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["protocolVersion", "ok", "contentSettings"]) ||
+    value["protocolVersion"] !== PROTOCOL_VERSION ||
+    value["ok"] !== true
+  ) {
+    return invalid();
+  }
+  const contentSettings = parseContentSettings(value["contentSettings"]);
+  return contentSettings === undefined
+    ? invalid()
+    : {
+        ok: true,
+        value: {
+          protocolVersion: PROTOCOL_VERSION,
+          ok: true,
+          contentSettings,
         },
       };
 }
@@ -294,6 +432,14 @@ export function createGetSettingsMessage(): GetSettingsMessage {
     protocolVersion: PROTOCOL_VERSION,
     target: "settings",
     command: "get",
+  };
+}
+
+export function createGetContentSettingsMessage(): GetContentSettingsMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    target: "settings",
+    command: "get-content",
   };
 }
 

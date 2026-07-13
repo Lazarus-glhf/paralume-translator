@@ -3,13 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import { createSettingsMessageHandler } from "../src/messaging/settings-handler";
 import { createBackgroundRouter } from "../src/messaging/background-router";
 import {
+  createGetContentSettingsMessage,
   createSaveSettingsMessage,
+  parseContentSettingsResponse,
   parseSettingsRequest,
   parseSettingsResponse,
 } from "../src/messaging/settings-protocol";
 import { createOptionsClient } from "../src/options/client";
 import type { ProviderPermissionsApi } from "../src/settings/permissions";
 import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  DEFAULT_RETRY_SETTINGS,
   SETTINGS_STORAGE_KEY,
   createSettingsRepository,
   type SettingsStorageArea,
@@ -29,6 +33,9 @@ const draft: ProviderSettingsDraft = {
     endpoint: "https://api.cognitive.microsofttranslator.com",
     region: "global",
   },
+  retry: DEFAULT_RETRY_SETTINGS,
+  appearance: DEFAULT_APPEARANCE_SETTINGS,
+  uiLanguage: "system",
 };
 
 function createStorage(): SettingsStorageArea {
@@ -72,9 +79,9 @@ describe("settings runtime protocol", () => {
       parseSettingsResponse({
         protocolVersion: 1,
         ok: true,
-        message: "Loaded.",
+        message: { id: "settings.loaded" },
         settings: {
-          version: 1,
+          version: 2,
           provider: "openai",
           openai: {
             ...draft.openai,
@@ -85,6 +92,9 @@ describe("settings runtime protocol", () => {
             ...draft.microsoft,
             apiKeyConfigured: false,
           },
+          retry: draft.retry,
+          appearance: draft.appearance,
+          uiLanguage: draft.uiLanguage,
         },
       }).ok,
     ).toBe(false);
@@ -112,6 +122,34 @@ describe("settings runtime protocol", () => {
     expect(stored.openai.apiKey).toBe("background-only-test-key");
   });
 
+  it("returns only non-sensitive content settings for injected page code", async () => {
+    const repository = createSettingsRepository(createStorage());
+    await repository.save(
+      { ...draft, uiLanguage: "zh-CN" },
+      { openaiApiKey: "content-must-not-see-this-key" },
+    );
+    const handler = createSettingsMessageHandler(repository, () =>
+      Promise.resolve(new MockTranslationProvider()),
+    );
+
+    const response = await handler(createGetContentSettingsMessage());
+    expect(parseContentSettingsResponse(response)).toEqual({
+      ok: true,
+      value: {
+        protocolVersion: 1,
+        ok: true,
+        contentSettings: {
+          retry: draft.retry,
+          appearance: draft.appearance,
+          uiLanguage: "zh-CN",
+        },
+      },
+    });
+    expect(JSON.stringify(response)).not.toMatch(
+      /content-must-not-see|apiKey|baseUrl|endpoint|provider/u,
+    );
+  });
+
   it("runs the selected provider connection test in the background", async () => {
     const repository = createSettingsRepository(createStorage());
     const translate = vi.fn(() =>
@@ -135,7 +173,7 @@ describe("settings runtime protocol", () => {
       }),
     ).resolves.toMatchObject({
       ok: true,
-      message: "Provider connection test succeeded.",
+      message: { id: "settings.testSucceeded" },
     });
     expect(translate).toHaveBeenCalledOnce();
   });
@@ -176,10 +214,13 @@ describe("Options settings client", () => {
       }),
     };
     const publicSettings = {
-      version: 1 as const,
+      version: 2 as const,
       provider: "openai" as const,
       openai: { ...draft.openai, apiKeyConfigured: false },
       microsoft: { ...draft.microsoft, apiKeyConfigured: false },
+      retry: draft.retry,
+      appearance: draft.appearance,
+      uiLanguage: draft.uiLanguage,
     };
     const sendMessage = vi.fn((message: unknown) => {
       const command = (message as { command?: string }).command;
@@ -187,8 +228,9 @@ describe("Options settings client", () => {
       return Promise.resolve({
         protocolVersion: 1,
         ok: true,
-        message:
-          command === "get" ? "Provider settings loaded." : "Settings saved.",
+        message: {
+          id: command === "get" ? "settings.loaded" : "settings.saved",
+        },
         settings:
           command === "get"
             ? publicSettings
@@ -205,7 +247,9 @@ describe("Options settings client", () => {
     });
     expect(events).toEqual(["request"]);
 
-    await expect(saving).resolves.toMatchObject({ message: "Settings saved." });
+    await expect(saving).resolves.toMatchObject({
+      message: { id: "settings.saved" },
+    });
     expect(events).toEqual(["request", "background:get", "background:save"]);
     expect(permissions.contains).not.toHaveBeenCalled();
     expect(permissions.request).toHaveBeenCalledWith({
@@ -260,10 +304,13 @@ describe("Options settings client", () => {
       remove: vi.fn(() => Promise.resolve(true)),
     };
     const oldSettings = {
-      version: 1 as const,
+      version: 2 as const,
       provider: "openai" as const,
       openai: { ...draft.openai, apiKeyConfigured: true },
       microsoft: { ...draft.microsoft, apiKeyConfigured: false },
+      retry: draft.retry,
+      appearance: draft.appearance,
+      uiLanguage: draft.uiLanguage,
     };
     const newDraft = {
       ...draft,
@@ -275,7 +322,7 @@ describe("Options settings client", () => {
         protocolVersion: 1,
         ok: true,
         settings: oldSettings,
-        message: "Loaded.",
+        message: { id: "settings.loaded" },
       })
       .mockResolvedValueOnce({
         protocolVersion: 1,
@@ -284,7 +331,7 @@ describe("Options settings client", () => {
           ...oldSettings,
           openai: { ...newDraft.openai, apiKeyConfigured: true },
         },
-        message: "Saved.",
+        message: { id: "settings.saved" },
       });
     const client = createOptionsClient({ sendMessage }, permissions);
 
@@ -310,10 +357,13 @@ describe("Options settings client", () => {
       remove: vi.fn(() => Promise.resolve(false)),
     };
     const oldSettings = {
-      version: 1 as const,
+      version: 2 as const,
       provider: "openai" as const,
       openai: { ...draft.openai, apiKeyConfigured: true },
       microsoft: { ...draft.microsoft, apiKeyConfigured: false },
+      retry: draft.retry,
+      appearance: draft.appearance,
+      uiLanguage: draft.uiLanguage,
     };
     const newDraft = {
       ...draft,
@@ -329,20 +379,19 @@ describe("Options settings client", () => {
         protocolVersion: 1,
         ok: true,
         settings: oldSettings,
-        message: "Loaded.",
+        message: { id: "settings.loaded" },
       })
       .mockResolvedValueOnce({
         protocolVersion: 1,
         ok: true,
         settings: savedSettings,
-        message: "Saved.",
+        message: { id: "settings.saved" },
       });
     const client = createOptionsClient({ sendMessage }, permissions);
 
     await expect(client.save(newDraft, {})).resolves.toEqual({
       settings: savedSettings,
-      message:
-        "Provider settings were saved, but the previous provider permission could not be removed. Remove it from the browser extension settings.",
+      message: { id: "settings.permissionRemovalFailed" },
     });
   });
 
@@ -359,10 +408,13 @@ describe("Options settings client", () => {
       }),
     };
     const loaded = {
-      version: 1 as const,
+      version: 2 as const,
       provider: "openai" as const,
       openai: { ...draft.openai, apiKeyConfigured: true },
       microsoft: { ...draft.microsoft, apiKeyConfigured: false },
+      retry: draft.retry,
+      appearance: draft.appearance,
+      uiLanguage: draft.uiLanguage,
     };
     const sendMessage = vi.fn((message: unknown) => {
       const command = (message as { command?: string }).command ?? "unknown";
@@ -371,10 +423,9 @@ describe("Options settings client", () => {
         protocolVersion: 1,
         ok: true,
         settings: loaded,
-        message:
-          command === "get"
-            ? "Provider settings loaded."
-            : "Provider connection test succeeded.",
+        message: {
+          id: command === "get" ? "settings.loaded" : "settings.testSucceeded",
+        },
       });
     });
     const client = createOptionsClient({ sendMessage }, permissions);
@@ -384,7 +435,7 @@ describe("Options settings client", () => {
     const testing = client.testConnection();
     expect(events).toEqual(["request"]);
     await expect(testing).resolves.toMatchObject({
-      message: "Provider connection test succeeded.",
+      message: { id: "settings.testSucceeded" },
     });
     expect(events).toEqual(["request", "background:test-connection"]);
     expect(permissions.contains).not.toHaveBeenCalled();

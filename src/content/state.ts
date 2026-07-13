@@ -9,6 +9,13 @@ export interface ContentRuntimeState {
   readonly translations: Set<HTMLElement>;
   readonly translationsBySource: WeakMap<HTMLElement, HTMLElement>;
   readonly translationStatuses: WeakMap<HTMLElement, "success" | "failure">;
+  readonly retryControls: Map<
+    HTMLElement,
+    {
+      readonly button: HTMLButtonElement;
+      readonly listener: () => void;
+    }
+  >;
   readonly sourceMarkers: Map<HTMLElement, SourceMarkerState>;
   readonly segmentIds: WeakMap<HTMLElement, string>;
   nextSegmentNumber: number;
@@ -36,6 +43,7 @@ export function createContentRuntimeState(
     translations: new Set(),
     translationsBySource: new WeakMap(),
     translationStatuses: new WeakMap(),
+    retryControls: new Map(),
     sourceMarkers: new Map(),
     segmentIds: new WeakMap(),
     nextSegmentNumber: 0,

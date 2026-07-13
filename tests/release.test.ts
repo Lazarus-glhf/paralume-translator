@@ -16,22 +16,22 @@ const releaseCommit = "0123456789abcdef0123456789abcdef01234567";
 
 const validManifest = {
   manifest_version: 3,
-  version: "0.0.1",
+  version: "0.0.2",
   permissions: ["activeTab", "scripting", "storage"],
   optional_host_permissions: ["https://*/*"],
 };
 
 describe("release version metadata", () => {
-  it("uses 0.0.1 for the first Alpha package version", () => {
+  it("uses 0.0.2 for the next Alpha package version", () => {
     const packageJson = JSON.parse(
       readFileSync(resolve("package.json"), "utf8"),
     ) as { version?: unknown };
 
-    expect(packageJson.version).toBe("0.0.1");
+    expect(packageJson.version).toBe("0.0.2");
   });
 
-  it("accepts the first Alpha version and Chromium-compatible numeric SemVer", () => {
-    expect(parseReleaseVersion("0.0.1")).toBe("0.0.1");
+  it("accepts the next Alpha version and Chromium-compatible numeric SemVer", () => {
+    expect(parseReleaseVersion("0.0.2")).toBe("0.0.2");
     expect(parseReleaseVersion("65535.2.3")).toBe("65535.2.3");
   });
 
@@ -49,45 +49,45 @@ describe("release version metadata", () => {
   it("requires a tag push to match package.json exactly", () => {
     expect(
       resolveReleaseMetadata({
-        packageVersion: "0.0.1",
+        packageVersion: "0.0.2",
         eventName: "push",
         refType: "tag",
-        refName: "v0.0.1",
+        refName: "v0.0.2",
         releaseSha: releaseCommit,
         trustedMainSha: releaseCommit,
       }),
-    ).toEqual({ version: "0.0.1", tag: "v0.0.1" });
+    ).toEqual({ version: "0.0.2", tag: "v0.0.2" });
 
     expect(() =>
       resolveReleaseMetadata({
-        packageVersion: "0.0.1",
+        packageVersion: "0.0.2",
         eventName: "push",
         refType: "tag",
         refName: "v0.1.1",
       }),
-    ).toThrow("exact tag v0.0.1");
+    ).toThrow("exact tag v0.0.2");
   });
 
   it("accepts an exact manual version only from main", () => {
     expect(
       resolveReleaseMetadata({
-        packageVersion: "0.0.1",
+        packageVersion: "0.0.2",
         eventName: "workflow_dispatch",
         refType: "branch",
         refName: "main",
-        inputVersion: "0.0.1",
+        inputVersion: "0.0.2",
         releaseSha: releaseCommit,
         trustedMainSha: releaseCommit,
       }),
-    ).toEqual({ version: "0.0.1", tag: "v0.0.1" });
+    ).toEqual({ version: "0.0.2", tag: "v0.0.2" });
 
     expect(() =>
       resolveReleaseMetadata({
-        packageVersion: "0.0.1",
+        packageVersion: "0.0.2",
         eventName: "workflow_dispatch",
         refType: "branch",
         refName: "release-test",
-        inputVersion: "0.0.1",
+        inputVersion: "0.0.2",
       }),
     ).toThrow("main branch");
   });
@@ -112,7 +112,7 @@ describe("release version metadata", () => {
 describe("release manifest validation", () => {
   it("accepts the minimal expected Manifest V3 permissions", () => {
     expect(() => {
-      validateReleaseManifest(validManifest, "0.0.1", "chrome");
+      validateReleaseManifest(validManifest, "0.0.2", "chrome");
     }).not.toThrow();
   });
 
@@ -120,21 +120,21 @@ describe("release manifest validation", () => {
     expect(() => {
       validateReleaseManifest(
         { ...validManifest, version: "0.1.1" },
-        "0.0.1",
+        "0.0.2",
         "chrome",
       );
     }).toThrow("does not match");
     expect(() => {
       validateReleaseManifest(
         { ...validManifest, host_permissions: ["https://*/*"] },
-        "0.0.1",
+        "0.0.2",
         "chrome",
       );
     }).toThrow("must not declare host_permissions");
     expect(() => {
       validateReleaseManifest(
         { ...validManifest, permissions: ["activeTab", "storage"] },
-        "0.0.1",
+        "0.0.2",
         "chrome",
       );
     }).toThrow("permissions must be exactly");
@@ -155,12 +155,12 @@ describe("release archive validation", () => {
     expect(() => {
       validateArchiveEntries(expectedEntries, "chrome");
     }).not.toThrow();
-    expect(getReleaseAssetNames("paralume-translator", "0.0.1")).toEqual({
+    expect(getReleaseAssetNames("paralume-translator", "0.0.2")).toEqual({
       archives: {
-        chrome: "paralume-translator-0.0.1-chrome.zip",
-        edge: "paralume-translator-0.0.1-edge.zip",
+        chrome: "paralume-translator-0.0.2-chrome.zip",
+        edge: "paralume-translator-0.0.2-edge.zip",
       },
-      checksums: "paralume-translator-0.0.1-SHA256SUMS.txt",
+      checksums: "paralume-translator-0.0.2-SHA256SUMS.txt",
     });
   });
 

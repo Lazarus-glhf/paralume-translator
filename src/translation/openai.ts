@@ -1,7 +1,10 @@
 import type { OpenAiSettings } from "../settings/types";
 import { UserFacingError } from "../shared/errors";
 import type { TranslationRequest, TranslationResult } from "../shared/types";
-import type { TranslationProvider } from "./provider";
+import type {
+  TranslationProvider,
+  TranslationProviderContext,
+} from "./provider";
 import { fetchProviderJson, type HttpProviderDependencies } from "./http";
 import {
   createTranslationJsonSchema,
@@ -112,6 +115,7 @@ export class OpenAiTranslationProvider implements TranslationProvider {
 
   async translate(
     request: TranslationRequest,
+    context?: TranslationProviderContext,
   ): Promise<readonly TranslationResult[]> {
     const schema = createTranslationJsonSchema(request.segments.length);
     const shared = {
@@ -146,6 +150,7 @@ export class OpenAiTranslationProvider implements TranslationProvider {
           }),
         },
         this.#dependencies,
+        context?.signal,
       );
       return parseStructuredTranslations(
         extractResponsesText(payload),
@@ -176,6 +181,7 @@ export class OpenAiTranslationProvider implements TranslationProvider {
         }),
       },
       this.#dependencies,
+      context?.signal,
     );
     return parseStructuredTranslations(extractChatText(payload), request);
   }

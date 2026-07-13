@@ -2,7 +2,10 @@ import type { MicrosoftSettings } from "../settings/types";
 import { UserFacingError } from "../shared/errors";
 import type { TranslationRequest, TranslationResult } from "../shared/types";
 import { fetchProviderJson, type HttpProviderDependencies } from "./http";
-import type { TranslationProvider } from "./provider";
+import type {
+  TranslationProvider,
+  TranslationProviderContext,
+} from "./provider";
 
 export interface ConfiguredMicrosoftSettings extends MicrosoftSettings {
   apiKey: string;
@@ -28,6 +31,7 @@ export class MicrosoftTranslationProvider implements TranslationProvider {
 
   async translate(
     request: TranslationRequest,
+    context?: TranslationProviderContext,
   ): Promise<readonly TranslationResult[]> {
     const targetLanguage: string = request.targetLanguage;
     if (targetLanguage !== "zh-CN") {
@@ -55,6 +59,7 @@ export class MicrosoftTranslationProvider implements TranslationProvider {
         ),
       },
       this.#dependencies,
+      context?.signal,
     );
 
     if (!Array.isArray(payload) || payload.length !== request.segments.length) {

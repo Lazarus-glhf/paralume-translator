@@ -7,6 +7,7 @@ export const SAFE_ERROR_MESSAGES = {
     "Paralume could not access this page. Reload it and try again.",
   TRANSLATION_FAILED:
     "The translation request failed. Check the provider settings and try again.",
+  TRANSLATION_CANCELLED: "The translation operation was cancelled.",
   REQUEST_LIMIT_EXCEEDED:
     "The page contains too much text for one translation request.",
   SEGMENT_TOO_LARGE:
@@ -55,11 +56,15 @@ export interface StructuredError {
 
 export class UserFacingError extends Error {
   readonly code: ErrorCode;
+  readonly retryAfterMs?: number;
 
-  constructor(code: ErrorCode) {
+  constructor(code: ErrorCode, options: { retryAfterMs?: number } = {}) {
     super(SAFE_ERROR_MESSAGES[code]);
     this.name = "UserFacingError";
     this.code = code;
+    if (options.retryAfterMs !== undefined) {
+      this.retryAfterMs = options.retryAfterMs;
+    }
   }
 }
 

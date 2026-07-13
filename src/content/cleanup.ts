@@ -16,6 +16,11 @@ export function clearTranslations(
       continue;
     }
 
+    const retryControl = state.retryControls.get(translation);
+    if (retryControl !== undefined) {
+      retryControl.button.removeEventListener("click", retryControl.listener);
+      state.retryControls.delete(translation);
+    }
     translation.remove();
     state.translations.delete(translation);
     state.translationStatuses.delete(translation);

@@ -1,10 +1,10 @@
 import {
   createError,
-  sanitizeError,
   sanitizeStructuredError,
+  UserFacingError,
   type ErrorCode,
-  type StructuredError,
 } from "../shared/errors";
+import { throwIfAborted } from "../shared/abort";
 import type {
   SourceSegment,
   TranslationFailure,
@@ -12,6 +12,7 @@ import type {
   TranslationResult,
 } from "../shared/types";
 import type { TranslationProvider } from "./provider";
+import { isAutoRetryableErrorCode } from "./retry";
 
 export interface BatchLimits {
   maxSegments: number;
@@ -39,13 +40,6 @@ function failure(segment: SourceSegment, code: ErrorCode): TranslationFailure {
     status: "failure",
     error: createError(code),
   };
-}
-
-function failureWithError(
-  segment: SourceSegment,
-  error: StructuredError,
-): TranslationFailure {
-  return { id: segment.id, status: "failure", error };
 }
 
 function createBatches(
@@ -94,49 +88,63 @@ async function translateBatch(
   provider: TranslationProvider,
   request: TranslationRequest,
   segments: readonly SourceSegment[],
+  signal?: AbortSignal,
 ): Promise<readonly TranslationResult[]> {
+  throwIfAborted(signal);
+  let providerResults: readonly TranslationResult[];
   try {
-    const providerResults = await provider.translate({
-      sourceLanguage: request.sourceLanguage,
-      targetLanguage: request.targetLanguage,
-      segments,
-    });
-    const counts = new Map<string, number>();
-    const byId = new Map<string, TranslationResult>();
+    providerResults = await provider.translate(
+      {
+        sourceLanguage: request.sourceLanguage,
+        targetLanguage: request.targetLanguage,
+        segments,
+      },
+      signal === undefined ? undefined : { signal },
+    );
+  } catch (error) {
+    if (
+      error instanceof UserFacingError &&
+      isAutoRetryableErrorCode(error.code)
+    ) {
+      return segments.map((segment) => failure(segment, error.code));
+    }
+    throw error;
+  }
+  throwIfAborted(signal);
+  const counts = new Map<string, number>();
+  const byId = new Map<string, TranslationResult>();
 
-    for (const result of providerResults) {
-      counts.set(result.id, (counts.get(result.id) ?? 0) + 1);
-      byId.set(
-        result.id,
-        result.status === "failure"
-          ? {
-              id: result.id,
-              status: "failure",
-              error: sanitizeStructuredError(result.error),
-            }
-          : result,
-      );
+  for (const result of providerResults) {
+    counts.set(result.id, (counts.get(result.id) ?? 0) + 1);
+    byId.set(
+      result.id,
+      result.status === "failure"
+        ? {
+            id: result.id,
+            status: "failure",
+            error: sanitizeStructuredError(result.error),
+          }
+        : result,
+    );
+  }
+
+  return segments.map((segment) => {
+    if ((counts.get(segment.id) ?? 0) > 1) {
+      return failure(segment, "DUPLICATE_RESULT");
     }
 
-    return segments.map((segment) => {
-      if ((counts.get(segment.id) ?? 0) > 1) {
-        return failure(segment, "DUPLICATE_RESULT");
-      }
-
-      return byId.get(segment.id) ?? failure(segment, "MISSING_RESULT");
-    });
-  } catch (error) {
-    const safeError = sanitizeError(error, "TRANSLATION_FAILED");
-    return segments.map((segment) => failureWithError(segment, safeError));
-  }
+    return byId.get(segment.id) ?? failure(segment, "MISSING_RESULT");
+  });
 }
 
 export async function translateInBatches(
   provider: TranslationProvider,
   request: TranslationRequest,
   limits: BatchLimits = DEFAULT_BATCH_LIMITS,
+  signal?: AbortSignal,
 ): Promise<readonly TranslationResult[]> {
   assertLimits(limits);
+  throwIfAborted(signal);
   const { batches, immediateResults } = createBatches(request.segments, limits);
   const resultsById = new Map(immediateResults);
   let nextBatchIndex = 0;
@@ -151,7 +159,7 @@ export async function translateInBatches(
         return;
       }
 
-      const results = await translateBatch(provider, request, batch);
+      const results = await translateBatch(provider, request, batch, signal);
       for (const result of results) {
         resultsById.set(result.id, result);
       }
@@ -164,6 +172,7 @@ export async function translateInBatches(
       worker,
     ),
   );
+  throwIfAborted(signal);
 
   return request.segments.map(
     (segment) =>

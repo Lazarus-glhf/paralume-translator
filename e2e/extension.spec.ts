@@ -16,6 +16,7 @@ import { triggerActionPopup, waitForDevToolsEndpoint } from "./action-popup";
 const extensionPath = resolve(".output/chrome-mv3");
 const fixturePath = resolve("e2e/fixtures/static-article.html");
 const fixtureUrl = "http://127.0.0.1:4173/static-article.html";
+const retryFixtureUrl = "http://127.0.0.1:4173/retry-article.html";
 const translationSelector =
   '[data-paralume-owned="true"][data-paralume-translation-for]';
 const paralumeMarkerSelector = [
@@ -23,6 +24,7 @@ const paralumeMarkerSelector = [
   "[data-paralume-owned]",
   "[data-paralume-translation-for]",
   "[data-paralume-translation-status]",
+  "[data-paralume-retry]",
 ].join(", ");
 
 interface ChromiumExtensionApi {
@@ -150,7 +152,7 @@ async function runRuntimeCommand(
   command: "translate" | "toggle" | "clear",
 ): Promise<{
   ok: boolean;
-  message?: string;
+  message?: { id: string; values?: Record<string, string | number> };
   state?: { translationCount: number; failureCount: number; visible: boolean };
 }> {
   return popupPage.evaluate(
@@ -167,7 +169,7 @@ async function runRuntimeCommand(
     { command, targetTabId },
   ) as Promise<{
     ok: boolean;
-    message?: string;
+    message?: { id: string; values?: Record<string, string | number> };
     state?: {
       translationCount: number;
       failureCount: number;
@@ -282,7 +284,7 @@ test.describe("unpacked Chromium extension", () => {
 
       await actionPopup.click("translate");
       await actionPopup.waitForStatus(
-        `Translated ${String(expectedSourceCount)} readable blocks.`,
+        `Translated ${String(expectedSourceCount)} readable blocks; 0 unavailable.`,
       );
       await expect(articlePage.locator(translationSelector)).toHaveCount(
         expectedSourceCount,
@@ -405,7 +407,10 @@ test.describe("unpacked Chromium extension", () => {
     );
     expect(translated).toMatchObject({
       ok: true,
-      message: `Translated ${String(expectedSourceCount)} readable blocks.`,
+      message: {
+        id: "content.translationSummary",
+        values: { succeeded: expectedSourceCount, failed: 0 },
+      },
       state: { translationCount: expectedSourceCount, visible: true },
     });
 
@@ -556,7 +561,7 @@ test.describe("unpacked Chromium extension", () => {
       runRuntimeCommand(popupPage, articleTabId, "translate"),
     ).resolves.toMatchObject({
       ok: true,
-      message: "Translations are already up to date.",
+      message: { id: "content.alreadyUpToDate" },
     });
     await expect(articlePage.locator(translationSelector)).toHaveCount(
       expectedSourceCount,
@@ -576,7 +581,7 @@ test.describe("unpacked Chromium extension", () => {
       runRuntimeCommand(popupPage, articleTabId, "toggle"),
     ).resolves.toMatchObject({
       ok: true,
-      message: "Translations hidden.",
+      message: { id: "content.hidden" },
       state: { visible: false },
     });
     expect(
@@ -595,7 +600,7 @@ test.describe("unpacked Chromium extension", () => {
       runRuntimeCommand(popupPage, articleTabId, "toggle"),
     ).resolves.toMatchObject({
       ok: true,
-      message: "Translations shown.",
+      message: { id: "content.shown" },
       state: { visible: true },
     });
     expect(
@@ -624,7 +629,10 @@ test.describe("unpacked Chromium extension", () => {
       runRuntimeCommand(popupPage, articleTabId, "clear"),
     ).resolves.toMatchObject({
       ok: true,
-      message: `Cleared ${String(expectedSourceCount)} translations.`,
+      message: {
+        id: "content.cleared",
+        values: { count: expectedSourceCount },
+      },
       state: { translationCount: 0 },
     });
     await expect(articlePage.locator(translationSelector)).toHaveCount(0);
@@ -646,7 +654,7 @@ test.describe("unpacked Chromium extension", () => {
 
     await clickPopupAction(popupPage, restrictedPage, "translate");
     await expect(popupPage.getByRole("alert")).toHaveText(
-      "Paralume cannot run on browser-internal, extension, or other restricted pages. Open a regular webpage and try again.",
+      /Paralume (?:cannot run|无法在)/u,
     );
     await expect(popupPage.locator("main")).toHaveAttribute(
       "aria-busy",
@@ -669,8 +677,9 @@ test.describe("unpacked Chromium extension", () => {
     let optionsPage = await context.newPage();
     await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
     await expect(optionsPage.getByRole("status")).toHaveText(
-      "Provider settings loaded.",
+      /^(?:Settings loaded\.|设置已加载。)$/u,
     );
+    await optionsPage.locator('select[name="uiLanguage"]').selectOption("en");
     await optionsPage.locator('select[name="provider"]').selectOption("openai");
     await optionsPage.locator('input[name="openaiBaseUrl"]').fill(firstBaseUrl);
     await optionsPage
@@ -690,8 +699,9 @@ test.describe("unpacked Chromium extension", () => {
     optionsPage = await context.newPage();
     await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
     await expect(optionsPage.getByRole("status")).toHaveText(
-      "Provider settings loaded.",
+      /^(?:Settings loaded\.|设置已加载。)$/u,
     );
+    await optionsPage.locator('select[name="uiLanguage"]').selectOption("en");
     await optionsPage.locator('select[name="provider"]').selectOption("openai");
     await optionsPage.locator('input[name="openaiBaseUrl"]').fill(firstBaseUrl);
     await optionsPage
@@ -701,9 +711,7 @@ test.describe("unpacked Chromium extension", () => {
     await keyInput.fill(credentialMarker);
     await instrumentOptionsPermissionCalls(optionsPage);
     await optionsPage.locator('button[data-action="save"]').click();
-    await expect(optionsPage.getByRole("status")).toHaveText(
-      "Provider settings saved.",
-    );
+    await expect(optionsPage.getByRole("status")).toHaveText("Settings saved.");
     expect(await getOptionsPermissionCalls(optionsPage)).toEqual({
       contains: [],
       request: [[firstOrigin]],
@@ -742,7 +750,7 @@ test.describe("unpacked Chromium extension", () => {
     optionsPage = await context.newPage();
     await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
     await expect(optionsPage.getByRole("status")).toHaveText(
-      "Provider settings loaded.",
+      "Settings loaded.",
     );
     await expect(optionsPage.locator('input[name="openaiApiKey"]')).toHaveValue(
       "",
@@ -765,16 +773,14 @@ test.describe("unpacked Chromium extension", () => {
     optionsPage = await context.newPage();
     await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
     await expect(optionsPage.getByRole("status")).toHaveText(
-      "Provider settings loaded.",
+      "Settings loaded.",
     );
     await optionsPage
       .locator('input[name="openaiBaseUrl"]')
       .fill(secondBaseUrl);
     await instrumentOptionsPermissionCalls(optionsPage);
     await optionsPage.locator('button[data-action="save"]').click();
-    await expect(optionsPage.getByRole("status")).toHaveText(
-      "Provider settings saved.",
-    );
+    await expect(optionsPage.getByRole("status")).toHaveText("Settings saved.");
     expect(await getOptionsPermissionCalls(optionsPage)).toEqual({
       contains: [],
       request: [[secondOrigin]],
@@ -804,7 +810,7 @@ test.describe("unpacked Chromium extension", () => {
     optionsPage = await context.newPage();
     await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
     await expect(optionsPage.getByRole("status")).toHaveText(
-      "Provider settings loaded.",
+      "Settings loaded.",
     );
     await expect(
       optionsPage.locator('input[name="openaiBaseUrl"]'),
@@ -838,7 +844,7 @@ test.describe("unpacked Chromium extension", () => {
     optionsPage = await context.newPage();
     await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
     await expect(optionsPage.getByRole("status")).toHaveText(
-      "Provider settings loaded.",
+      "Settings loaded.",
     );
     await expect(
       optionsPage.locator('input[name="openaiApiKey"]'),
@@ -871,6 +877,7 @@ test.describe("unpacked Chromium extension", () => {
         protocolVersion: 1,
         target: "background",
         command: "translate",
+        operationId: globalThis.crypto.randomUUID(),
         request: {
           sourceLanguage: "auto",
           targetLanguage: "zh-CN",
@@ -921,10 +928,210 @@ test.describe("unpacked Chromium extension", () => {
             endpoint: "https://api.cognitive.microsofttranslator.com",
             region: "global",
           },
+          retry: { enabled: true, maxRetries: 2 },
+          appearance: {
+            fontFamily: "system",
+            fontSize: 16,
+            textColor: "#456257",
+            backgroundColor: "#f4f8f5",
+            lineHeight: 1.6,
+            opacity: 1,
+            verticalSpacing: 8,
+          },
+          uiLanguage: "system",
         },
         apiKeys: {},
       });
     });
     await optionsPage.close();
+  });
+
+  test("Chinese retry and appearance settings persist across worker restart and drive automatic/manual retry cleanup", async () => {
+    if (context === undefined || browserCdp === undefined) {
+      throw new Error("The extension browser context was not initialized.");
+    }
+
+    let optionsPage = await context.newPage();
+    await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+    await expect(optionsPage.getByRole("status")).toHaveText(
+      "Settings loaded.",
+    );
+    await optionsPage
+      .locator('select[name="uiLanguage"]')
+      .selectOption("zh-CN");
+    await optionsPage.locator('select[name="provider"]').selectOption("mock");
+    await optionsPage.locator('input[name="retryEnabled"]').check();
+    await optionsPage
+      .locator('select[name="retryMaxRetries"]')
+      .selectOption("2");
+    await optionsPage
+      .locator('select[name="appearanceFontFamily"]')
+      .selectOption("serif");
+    await optionsPage.locator('input[name="appearanceFontSize"]').fill("20");
+    await optionsPage.locator('input[name="appearanceLineHeight"]').fill("1.9");
+    await optionsPage.locator('input[name="appearanceOpacity"]').fill("0.8");
+    await optionsPage
+      .locator('input[name="appearanceVerticalSpacing"]')
+      .fill("14");
+    for (const [name, value] of [
+      ["appearanceTextColor", "#112233"],
+      ["appearanceBackgroundColor", "#ddeeff"],
+    ] as const) {
+      await optionsPage
+        .locator(`input[name="${name}"]`)
+        .evaluate((input, nextValue) => {
+          const colorInput = input as HTMLInputElement;
+          Reflect.set(
+            HTMLInputElement.prototype,
+            "value",
+            nextValue,
+            colorInput,
+          );
+          colorInput.dispatchEvent(new Event("input", { bubbles: true }));
+          colorInput.dispatchEvent(new Event("change", { bubbles: true }));
+        }, value);
+    }
+    await optionsPage.locator('button[data-action="save"]').click();
+    await expect(optionsPage.getByRole("status")).toHaveText("设置已保存。");
+    await optionsPage.close();
+
+    const pageCdp = await context.newCDPSession(popupPage);
+    await pageCdp.send("ServiceWorker.enable");
+    await pageCdp.send("ServiceWorker.stopAllWorkers");
+    await pageCdp.detach();
+
+    optionsPage = await context.newPage();
+    await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+    await expect(optionsPage.getByRole("status")).toHaveText("设置已加载。");
+    await expect(optionsPage.locator('select[name="uiLanguage"]')).toHaveValue(
+      "zh-CN",
+    );
+    await expect(optionsPage.locator('select[name="provider"]')).toHaveValue(
+      "mock",
+    );
+    await expect(
+      optionsPage.locator('select[name="retryMaxRetries"]'),
+    ).toHaveValue("2");
+    await expect(
+      optionsPage.locator('select[name="appearanceFontFamily"]'),
+    ).toHaveValue("serif");
+    await expect(
+      optionsPage.locator('input[name="appearanceFontSize"]'),
+    ).toHaveValue("20");
+    await expect(
+      optionsPage.locator('input[name="appearanceTextColor"]'),
+    ).toHaveValue("#112233");
+    await expect(
+      optionsPage.locator('input[name="appearanceBackgroundColor"]'),
+    ).toHaveValue("#ddeeff");
+    await optionsPage.close();
+
+    const retryPage = await context.newPage();
+    await retryPage.goto(retryFixtureUrl);
+    await retryPage.bringToFront();
+    const automaticSourceStyle = await retryPage
+      .locator("#automatic-source")
+      .getAttribute("style");
+    const actionPopup = await triggerActionPopup(
+      context,
+      browserCdp,
+      extensionId,
+      retryPage,
+    );
+    try {
+      await actionPopup.click("translate");
+      await actionPopup.waitForStatus("已翻译 1 个可读文本块；0 个不可用。");
+      const automaticTranslation = retryPage.locator(
+        `#automatic-source + ${translationSelector}`,
+      );
+      await expect(automaticTranslation).toHaveText(
+        "【Mock zh-CN attempt 3】Automatic retry fixture text.",
+      );
+
+      await retryPage.evaluate(() => {
+        const manual = document.createElement("p");
+        manual.id = "manual-source";
+        manual.style.marginTop = "21px";
+        manual.textContent =
+          "[[PARALUME_MOCK_TRANSIENT:3:SERVER_UNAVAILABLE]] Manual retry fixture text.";
+        document.querySelector("main")?.append(manual);
+      });
+      const manualSourceStyle = await retryPage
+        .locator("#manual-source")
+        .getAttribute("style");
+
+      await actionPopup.click("translate");
+      await actionPopup.waitForStatus("已翻译 0 个可读文本块；1 个不可用。");
+      const manualFailure = retryPage.locator(
+        `#manual-source + ${translationSelector}`,
+      );
+      await expect(manualFailure).toContainText("翻译服务暂时不可用");
+      const retryButton = manualFailure.locator('[data-paralume-retry="true"]');
+      await expect(retryButton).toHaveText("重试");
+      await expect(retryButton).toHaveAttribute(
+        "aria-label",
+        "重试此可读文本块的翻译",
+      );
+      await manualFailure.evaluate((translation) => {
+        translation.setAttribute("data-e2e-manual-node", "preserved");
+      });
+      await retryButton.click();
+      await expect(manualFailure).toHaveText(
+        "【Mock zh-CN attempt 4】Manual retry fixture text.",
+      );
+      await expect(manualFailure).toHaveAttribute(
+        "data-e2e-manual-node",
+        "preserved",
+      );
+      await expect(manualFailure.locator("[data-paralume-retry]")).toHaveCount(
+        0,
+      );
+
+      for (const translation of [automaticTranslation, manualFailure]) {
+        await expect(translation).toHaveCSS("font-size", "20px");
+        await expect(translation).toHaveCSS("color", "rgb(17, 34, 51)");
+        await expect(translation).toHaveCSS(
+          "background-color",
+          "rgb(221, 238, 255)",
+        );
+        await expect(translation).toHaveCSS("line-height", "38px");
+        await expect(translation).toHaveCSS("opacity", "0.8");
+        await expect(translation).toHaveCSS("margin-top", "14px");
+        await expect(translation).toHaveCSS("margin-bottom", "14px");
+      }
+      await expect(retryPage.locator("#automatic-source")).toHaveAttribute(
+        "style",
+        automaticSourceStyle ?? "",
+      );
+      await expect(retryPage.locator("#manual-source")).toHaveAttribute(
+        "style",
+        manualSourceStyle ?? "",
+      );
+
+      await retryPage.locator("#page-button").click();
+      await expect
+        .poll(() =>
+          retryPage.evaluate(() =>
+            Number(Reflect.get(window, "retryFixtureClicks")),
+          ),
+        )
+        .toBe(1);
+
+      await actionPopup.click("clear");
+      await actionPopup.waitForStatus("已清除 2 条译文。");
+      await expect(retryPage.locator(translationSelector)).toHaveCount(0);
+      await expect(retryPage.locator(paralumeMarkerSelector)).toHaveCount(0);
+      await retryPage.locator("#page-button").click();
+      await expect
+        .poll(() =>
+          retryPage.evaluate(() =>
+            Number(Reflect.get(window, "retryFixtureClicks")),
+          ),
+        )
+        .toBe(2);
+    } finally {
+      await actionPopup.close();
+      await retryPage.close();
+    }
   });
 });

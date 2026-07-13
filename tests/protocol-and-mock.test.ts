@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseBackgroundMessage,
   parseBackgroundRequest,
+  parseCancelTranslationResponse,
   parseContentCommand,
   parseTranslationResponse,
 } from "../src/messaging/validation";
-import { MockTranslationProvider } from "../src/translation/mock";
+import {
+  createBackgroundCancelTranslationMessage,
+  createBackgroundTranslationMessage,
+} from "../src/messaging/protocol";
+import {
+  MockTranslationProvider,
+  resetMockTransientFailuresForTests,
+} from "../src/translation/mock";
 import type { TranslationRequest } from "../src/shared/types";
 import { createError } from "../src/shared/errors";
 
@@ -17,6 +26,8 @@ const request: TranslationRequest = {
     { id: "segment-b", text: "A readable second paragraph." },
   ],
 };
+
+const operationId = "9a0bb651-6f5d-4f7c-9df1-cf83166d9b69";
 
 describe("runtime protocol validation", () => {
   it.each([
@@ -43,6 +54,68 @@ describe("runtime protocol validation", () => {
     },
   ])("rejects a malformed background message: %j", (message) => {
     expect(parseBackgroundRequest(message).ok).toBe(false);
+  });
+
+  it("requires an opaque UUID operation ID for translate and cancel messages", () => {
+    expect(
+      parseBackgroundRequest(
+        createBackgroundTranslationMessage(request, operationId),
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: { command: "translate", operationId },
+    });
+    expect(
+      parseBackgroundMessage(
+        createBackgroundCancelTranslationMessage(operationId),
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: { command: "cancel-translation", operationId },
+    });
+
+    for (const invalidOperationId of [
+      "",
+      "operation-1",
+      "9a0bb651-6f5d-1f7c-9df1-cf83166d9b69",
+      `${operationId}unexpected`,
+    ]) {
+      expect(
+        parseBackgroundMessage({
+          protocolVersion: 1,
+          target: "background",
+          command: "translate",
+          operationId: invalidOperationId,
+          request,
+        }).ok,
+      ).toBe(false);
+      expect(
+        parseBackgroundMessage({
+          protocolVersion: 1,
+          target: "background",
+          command: "cancel-translation",
+          operationId: invalidOperationId,
+        }).ok,
+      ).toBe(false);
+    }
+  });
+
+  it("strictly validates cancel responses", () => {
+    expect(
+      parseCancelTranslationResponse({
+        protocolVersion: 1,
+        ok: true,
+        cancelled: false,
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseCancelTranslationResponse({
+        protocolVersion: 1,
+        ok: true,
+        cancelled: false,
+        extra: true,
+      }).ok,
+    ).toBe(false);
   });
 
   it.each([
@@ -125,6 +198,35 @@ describe("MockTranslationProvider", () => {
         id: "segment-b",
         status: "failure",
         error: createError("TRANSLATION_FAILED"),
+      },
+    ]);
+  });
+
+  it("provides deterministic whole-batch transient failures for retry fixtures", async () => {
+    resetMockTransientFailuresForTests();
+    const provider = new MockTranslationProvider();
+    const transientRequest: TranslationRequest = {
+      sourceLanguage: "auto",
+      targetLanguage: "zh-CN",
+      segments: [
+        {
+          id: "transient-segment",
+          text: "[[PARALUME_MOCK_TRANSIENT:2:SERVER_UNAVAILABLE]] Retry fixture text.",
+        },
+      ],
+    };
+
+    await expect(provider.translate(transientRequest)).rejects.toMatchObject({
+      code: "SERVER_UNAVAILABLE",
+    });
+    await expect(provider.translate(transientRequest)).rejects.toMatchObject({
+      code: "SERVER_UNAVAILABLE",
+    });
+    await expect(provider.translate(transientRequest)).resolves.toEqual([
+      {
+        id: "transient-segment",
+        status: "success",
+        translatedText: "【Mock zh-CN attempt 3】Retry fixture text.",
       },
     ]);
   });

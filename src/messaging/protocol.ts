@@ -1,4 +1,5 @@
 import type { StructuredError } from "../shared/errors";
+import type { MessageDescriptor } from "../localization";
 import type {
   ContentState,
   TranslationRequest,
@@ -8,13 +9,25 @@ import type {
 export const PROTOCOL_VERSION = 1 as const;
 
 export type ContentCommand = "translate" | "toggle" | "clear";
+export type OperationId = string;
 
 export interface BackgroundTranslationMessage {
   protocolVersion: typeof PROTOCOL_VERSION;
   target: "background";
   command: "translate";
+  operationId: OperationId;
   request: TranslationRequest;
 }
+
+export interface BackgroundCancelTranslationMessage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  target: "background";
+  command: "cancel-translation";
+  operationId: OperationId;
+}
+
+export type BackgroundMessage =
+  BackgroundTranslationMessage | BackgroundCancelTranslationMessage;
 
 export interface ContentCommandMessage {
   protocolVersion: typeof PROTOCOL_VERSION;
@@ -32,7 +45,13 @@ export interface ContentSuccessResponse {
   protocolVersion: typeof PROTOCOL_VERSION;
   ok: true;
   state: ContentState;
-  message: string;
+  message: MessageDescriptor;
+}
+
+export interface CancelTranslationSuccessResponse {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  ok: true;
+  cancelled: boolean;
 }
 
 export interface ErrorResponse {
@@ -42,17 +61,38 @@ export interface ErrorResponse {
 }
 
 export type TranslationResponse = TranslationSuccessResponse | ErrorResponse;
+export type CancelTranslationResponse =
+  CancelTranslationSuccessResponse | ErrorResponse;
+export type BackgroundResponse =
+  TranslationResponse | CancelTranslationSuccessResponse;
 export type ContentResponse = ContentSuccessResponse | ErrorResponse;
 
 export function createBackgroundTranslationMessage(
   request: TranslationRequest,
+  operationId: OperationId,
 ): BackgroundTranslationMessage {
   return {
     protocolVersion: PROTOCOL_VERSION,
     target: "background",
     command: "translate",
+    operationId,
     request,
   };
+}
+
+export function createBackgroundCancelTranslationMessage(
+  operationId: OperationId,
+): BackgroundCancelTranslationMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    target: "background",
+    command: "cancel-translation",
+    operationId,
+  };
+}
+
+export function createOperationId(): OperationId {
+  return globalThis.crypto.randomUUID();
 }
 
 export function createContentCommand(

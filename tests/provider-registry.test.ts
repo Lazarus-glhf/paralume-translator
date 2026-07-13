@@ -33,6 +33,8 @@ const grantedPermissions: ProviderPermissionsApi = {
   request: vi.fn(() => Promise.resolve(true)),
 };
 
+const operationId = "37d11119-1b61-4b44-84fe-e09a2bed91ab";
+
 describe("translation provider registry", () => {
   it.each([
     ["mock", "Mock"],
@@ -84,11 +86,14 @@ describe("translation provider registry", () => {
 
     await expect(
       handler(
-        createBackgroundTranslationMessage({
-          sourceLanguage: "auto",
-          targetLanguage: "zh-CN",
-          segments: [{ id: "segment-a", text: "Readable paragraph." }],
-        }),
+        createBackgroundTranslationMessage(
+          {
+            sourceLanguage: "auto",
+            targetLanguage: "zh-CN",
+            segments: [{ id: "segment-a", text: "Readable paragraph." }],
+          },
+          operationId,
+        ),
       ),
     ).resolves.toMatchObject({
       ok: true,
@@ -100,5 +105,60 @@ describe("translation provider registry", () => {
       ],
     });
     expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("wraps the selected background provider with the persisted retry policy", async () => {
+    const selected = {
+      ...settings("openai"),
+      retry: { enabled: true, maxRetries: 2 },
+    };
+    const load = vi.fn(() => Promise.resolve(selected));
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("temporary", { status: 503 }))
+      .mockResolvedValueOnce(new Response("temporary", { status: 503 }))
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            output_text: JSON.stringify({
+              translations: [
+                { id: "segment-a", translatedText: "后台重试成功" },
+              ],
+            }),
+          }),
+          { status: 200 },
+        ),
+      );
+    const sleep = vi.fn(() => Promise.resolve());
+    const resolveProvider = createSettingsBackedProviderResolver(
+      { load },
+      grantedPermissions,
+      { fetch, retry: { sleep, random: () => 0.5 } },
+    );
+    const handler = createBackgroundMessageHandler(resolveProvider);
+
+    await expect(
+      handler(
+        createBackgroundTranslationMessage(
+          {
+            sourceLanguage: "auto",
+            targetLanguage: "zh-CN",
+            segments: [{ id: "segment-a", text: "Readable paragraph." }],
+          },
+          operationId,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      results: [
+        {
+          id: "segment-a",
+          status: "success",
+          translatedText: "后台重试成功",
+        },
+      ],
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
   });
 });

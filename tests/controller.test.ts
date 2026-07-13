@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  PARALUME_RETRY_ATTRIBUTE,
   PARALUME_SOURCE_ID_ATTRIBUTE,
   PARALUME_TRANSLATION_FOR_ATTRIBUTE,
 } from "../src/content/constants";
@@ -12,6 +13,11 @@ import type {
   TranslationResult,
 } from "../src/shared/types";
 import { createError } from "../src/shared/errors";
+import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  DEFAULT_RETRY_SETTINGS,
+} from "../src/settings/repository";
+import type { ContentSettings } from "../src/settings/types";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -98,9 +104,12 @@ describe("content controller workflow", () => {
     ).toBe("Translated first paragraph.");
     expect(
       document.querySelector("#second")?.nextElementSibling?.textContent,
-    ).toBe(
+    ).toContain(
       "Translation unavailable. The translation request failed. Check the provider settings and try again.",
     );
+    expect(
+      document.querySelector("#second")?.nextElementSibling?.textContent,
+    ).toContain("Retry");
     expect(
       document.querySelectorAll("pre [data-paralume-source-id]"),
     ).toHaveLength(0);
@@ -154,12 +163,21 @@ describe("content controller workflow", () => {
         })),
       }),
     );
+    const loadContentSettings = vi.fn(() =>
+      Promise.resolve<ContentSettings>({
+        retry: DEFAULT_RETRY_SETTINGS,
+        appearance: DEFAULT_APPEARANCE_SETTINGS,
+        uiLanguage: "en",
+      }),
+    );
     const controller = createContentController({
       document,
       state: createContentRuntimeState({ runtimeId: "toggle" }),
       requestTranslations,
+      loadContentSettings,
     });
     await controller.handleMessage(createContentCommand("translate"));
+    loadContentSettings.mockClear();
 
     const hidden = await controller.handleMessage(
       createContentCommand("toggle"),
@@ -171,6 +189,7 @@ describe("content controller workflow", () => {
     expect(hidden).toMatchObject({ ok: true, state: { visible: false } });
     expect(shown).toMatchObject({ ok: true, state: { visible: true } });
     expect(requestTranslations).toHaveBeenCalledOnce();
+    expect(loadContentSettings).not.toHaveBeenCalled();
   });
 
   it("clear removes translations and markers and restores original structure", async () => {
@@ -237,6 +256,9 @@ describe("content controller workflow", () => {
       ok: false,
       error: { code: "INVALID_MESSAGE" },
     });
+    expect(
+      document.querySelectorAll(`[${PARALUME_RETRY_ATTRIBUTE}]`),
+    ).toHaveLength(0);
   });
 
   it("does not expose rejected runtime exception details to page responses", async () => {
@@ -260,6 +282,12 @@ describe("content controller workflow", () => {
       error: createError("TRANSLATION_FAILED"),
     });
     expect(JSON.stringify(response)).not.toMatch(
+      /LEAK_SECRET|private\.invalid|LEAK_PAGE_TEXT/u,
+    );
+    expect(
+      document.querySelector(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
+    ).toBeNull();
+    expect(document.body.textContent).not.toMatch(
       /LEAK_SECRET|private\.invalid|LEAK_PAGE_TEXT/u,
     );
   });
@@ -307,18 +335,24 @@ describe("content controller workflow", () => {
     document.body.innerHTML = `<p>Readable paragraph with cancellable translation work.</p>`;
     const responses = [deferred<unknown>(), deferred<unknown>()];
     const requests: TranslationRequest[] = [];
-    const requestTranslations = vi.fn((request: TranslationRequest) => {
-      requests.push(request);
-      const next = responses[requests.length - 1];
-      if (next === undefined) {
-        throw new Error("Unexpected translation request.");
-      }
-      return next.promise;
-    });
+    const operationIds: string[] = [];
+    const requestTranslations = vi.fn(
+      (request: TranslationRequest, operationId: string) => {
+        operationIds.push(operationId);
+        requests.push(request);
+        const next = responses[requests.length - 1];
+        if (next === undefined) {
+          throw new Error("Unexpected translation request.");
+        }
+        return next.promise;
+      },
+    );
+    const cancelTranslation = vi.fn(() => Promise.resolve());
     const controller = createContentController({
       document,
       state: createContentRuntimeState({ runtimeId: "generation" }),
       requestTranslations,
+      cancelTranslation,
     });
 
     const staleOperation = controller.handleMessage(
@@ -327,6 +361,7 @@ describe("content controller workflow", () => {
     await expect(
       controller.handleMessage(createContentCommand("clear")),
     ).resolves.toMatchObject({ ok: true, state: { translationCount: 0 } });
+    expect(cancelTranslation).toHaveBeenCalledWith(operationIds[0]);
     const freshOperation = controller.handleMessage(
       createContentCommand("translate"),
     );
@@ -367,6 +402,135 @@ describe("content controller workflow", () => {
       document.querySelector(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`)
         ?.textContent,
     ).toBe("Fresh translation");
+  });
+
+  it("clears synchronously without awaiting deferred settings and never starts stale provider work", async () => {
+    document.body.innerHTML = `<p id="first">First readable paragraph for immediate clear.</p>`;
+    const deferredSettings = deferred<ContentSettings>();
+    const settings = {
+      retry: DEFAULT_RETRY_SETTINGS,
+      appearance: DEFAULT_APPEARANCE_SETTINGS,
+      uiLanguage: "en" as const,
+    };
+    let settingsCall = 0;
+    const loadContentSettings = vi.fn(() => {
+      settingsCall += 1;
+      return settingsCall === 1
+        ? Promise.resolve(settings)
+        : deferredSettings.promise;
+    });
+    const operationIds: string[] = [];
+    const requestTranslations = vi.fn(
+      (request: TranslationRequest, operationId: string) => {
+        operationIds.push(operationId);
+        return Promise.resolve(
+          successResponse(
+            request.segments.map((segment) => ({
+              id: segment.id,
+              status: "success" as const,
+              translatedText: "Initial translation",
+            })),
+          ),
+        );
+      },
+    );
+    const cancelTranslation = vi.fn(() => Promise.resolve());
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "deferred-settings" }),
+      requestTranslations,
+      cancelTranslation,
+      loadContentSettings,
+    });
+    await controller.handleMessage(createContentCommand("translate"));
+    const second = document.createElement("p");
+    second.textContent = "Second readable paragraph awaiting settings.";
+    document.body.append(second);
+
+    const staleTranslate = controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    expect(loadContentSettings).toHaveBeenCalledTimes(2);
+    const clearResponse = controller.handleMessage(
+      createContentCommand("clear"),
+    );
+
+    expect(
+      document.querySelector(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
+    ).toBeNull();
+    await expect(clearResponse).resolves.toMatchObject({
+      ok: true,
+      state: { translationCount: 0 },
+    });
+    expect(cancelTranslation).toHaveBeenCalledOnce();
+    expect(cancelTranslation).toHaveBeenCalledWith(expect.any(String));
+    expect(requestTranslations).toHaveBeenCalledOnce();
+
+    deferredSettings.resolve(settings);
+    await expect(staleTranslate).resolves.toMatchObject({
+      ok: true,
+      message: { id: "content.cancelled" },
+    });
+    expect(requestTranslations).toHaveBeenCalledOnce();
+    expect(document.body.textContent).not.toContain("Initial translation");
+  });
+
+  it("does not let stale settings from a cleared generation overwrite a fresh translation", async () => {
+    document.body.innerHTML = `<p>Readable paragraph for settings generation isolation.</p>`;
+    const staleSettings = deferred<ContentSettings>();
+    const freshSettings = deferred<ContentSettings>();
+    const loadContentSettings = vi
+      .fn<() => Promise<ContentSettings>>()
+      .mockReturnValueOnce(staleSettings.promise)
+      .mockReturnValueOnce(freshSettings.promise);
+    const requestTranslations = vi.fn((request: TranslationRequest) =>
+      Promise.resolve(
+        successResponse(
+          request.segments.map((segment) => ({
+            id: segment.id,
+            status: "success" as const,
+            translatedText: "Fresh settings translation",
+          })),
+        ),
+      ),
+    );
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "settings-race" }),
+      requestTranslations,
+      cancelTranslation: () => Promise.resolve(),
+      loadContentSettings,
+    });
+
+    const stale = controller.handleMessage(createContentCommand("translate"));
+    await controller.handleMessage(createContentCommand("clear"));
+    const fresh = controller.handleMessage(createContentCommand("translate"));
+    freshSettings.resolve({
+      retry: DEFAULT_RETRY_SETTINGS,
+      appearance: { ...DEFAULT_APPEARANCE_SETTINGS, fontSize: 20 },
+      uiLanguage: "en",
+    });
+    await expect(fresh).resolves.toMatchObject({
+      ok: true,
+      state: { translationCount: 1 },
+    });
+
+    staleSettings.resolve({
+      retry: DEFAULT_RETRY_SETTINGS,
+      appearance: { ...DEFAULT_APPEARANCE_SETTINGS, fontSize: 30 },
+      uiLanguage: "zh-CN",
+    });
+    await expect(stale).resolves.toMatchObject({
+      ok: true,
+      message: { id: "content.cancelled" },
+    });
+
+    expect(requestTranslations).toHaveBeenCalledOnce();
+    expect(
+      document.querySelector<HTMLElement>(
+        `[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`,
+      )?.style.fontSize,
+    ).toBe("20px");
   });
 
   it("uses visibility at completion when toggle runs during a pending translate", async () => {
@@ -475,7 +639,10 @@ describe("content controller workflow", () => {
       state: { translationCount: 2 },
     });
     if (firstResponse.ok) {
-      expect(firstResponse.message).toContain("1 additional readable block");
+      expect(firstResponse.message).toEqual({
+        id: "content.translationSummaryOmitted",
+        values: { succeeded: 2, failed: 0, omitted: 1 },
+      });
     }
     expect(document.querySelector("#third")?.nextElementSibling).toBeNull();
 
@@ -483,5 +650,287 @@ describe("content controller workflow", () => {
     expect(requests[1]?.segments.map(({ text }) => text)).toEqual([
       "Third readable budget paragraph",
     ]);
+  });
+
+  it("manually retries only one failed segment, deduplicates clicks, and replaces it in place", async () => {
+    document.body.innerHTML = `<p id="source">Readable paragraph for manual retry.</p>`;
+    const manualResponse = deferred<unknown>();
+    const requests: TranslationRequest[] = [];
+    const requestTranslations = vi.fn((request: TranslationRequest) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        return Promise.resolve(
+          successResponse([
+            {
+              id: request.segments[0]?.id ?? "missing",
+              status: "failure",
+              error: createError("AUTHENTICATION_FAILED"),
+            },
+          ]),
+        );
+      }
+      return manualResponse.promise;
+    });
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "manual-retry" }),
+      requestTranslations,
+      loadContentSettings: () =>
+        Promise.resolve({
+          retry: DEFAULT_RETRY_SETTINGS,
+          appearance: DEFAULT_APPEARANCE_SETTINGS,
+          uiLanguage: "zh-CN",
+        }),
+      browserUiLanguage: () => "en-US",
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+    const failure = document.querySelector<HTMLElement>(
+      `[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`,
+    );
+    if (failure === null) {
+      throw new Error("Manual retry failure UI was not rendered.");
+    }
+    const button = failure.querySelector<HTMLButtonElement>(
+      `[${PARALUME_RETRY_ATTRIBUTE}]`,
+    );
+    if (button === null) {
+      throw new Error("Manual retry button was not rendered.");
+    }
+    expect(failure.textContent).toContain("翻译服务拒绝了已配置的凭据");
+
+    button.click();
+    button.click();
+    await vi.waitFor(() => {
+      expect(requestTranslations).toHaveBeenCalledTimes(2);
+    });
+    expect(requests[1]?.segments).toHaveLength(1);
+    expect(requests[1]?.segments[0]?.id).toBe(requests[0]?.segments[0]?.id);
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toBe("正在重试…");
+
+    const segment = requests[1]?.segments[0];
+    if (segment === undefined) {
+      throw new Error("Manual retry request was not captured.");
+    }
+    manualResponse.resolve(
+      successResponse([
+        {
+          id: segment.id,
+          status: "success",
+          translatedText: "单段重试成功",
+        },
+      ]),
+    );
+    await vi.waitFor(() => {
+      expect(failure.textContent).toBe("单段重试成功");
+    });
+    expect(failure.querySelector(`[${PARALUME_RETRY_ATTRIBUTE}]`)).toBeNull();
+    expect(failure.hasAttribute("aria-busy")).toBe(false);
+    expect(document.querySelector("#source")?.nextElementSibling).toBe(failure);
+  });
+
+  it.each([
+    "API_KEY_UNCONFIGURED",
+    "PERMISSION_MISSING",
+    "AUTHENTICATION_FAILED",
+    "VALIDATION_ERROR",
+    "MALFORMED_JSON",
+    "MALFORMED_PROVIDER_OUTPUT",
+    "INVALID_MESSAGE",
+    "INTERNAL_ERROR",
+  ] as const)(
+    "does not render segment Retry controls for request-global %s",
+    async (code) => {
+      document.body.innerHTML = `
+        <p>First readable paragraph for a global failure.</p>
+        <p>Second readable paragraph for a global failure.</p>
+      `;
+      const requestTranslations = vi.fn(() =>
+        Promise.resolve({
+          protocolVersion: 1,
+          ok: false,
+          error: createError(code),
+        }),
+      );
+      const controller = createContentController({
+        document,
+        state: createContentRuntimeState({ runtimeId: `global-${code}` }),
+        requestTranslations,
+      });
+
+      await expect(
+        controller.handleMessage(createContentCommand("translate")),
+      ).resolves.toMatchObject({ ok: false, error: { code } });
+      expect(
+        document.querySelectorAll(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
+      ).toHaveLength(0);
+      expect(
+        document.querySelectorAll(`[${PARALUME_RETRY_ATTRIBUTE}]`),
+      ).toHaveLength(0);
+      expect(requestTranslations).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("removes manual Retry after a legitimate segment failure is followed by a global failure", async () => {
+    document.body.innerHTML = `<p>Readable paragraph for global manual retry failure.</p>`;
+    let call = 0;
+    const requestTranslations = vi.fn((request: TranslationRequest) => {
+      call += 1;
+      if (call === 1) {
+        return Promise.resolve(
+          successResponse([
+            {
+              id: request.segments[0]?.id ?? "missing",
+              status: "failure",
+              error: createError("NETWORK_ERROR"),
+            },
+          ]),
+        );
+      }
+      return Promise.resolve({
+        protocolVersion: 1,
+        ok: false,
+        error: createError("PERMISSION_MISSING"),
+      });
+    });
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "global-retry" }),
+      requestTranslations,
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+    const failure = document.querySelector<HTMLElement>(
+      `[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`,
+    );
+    if (failure === null) {
+      throw new Error("Segment failure UI was not rendered.");
+    }
+    const button = failure.querySelector<HTMLButtonElement>("button");
+    if (button === null) {
+      throw new Error("Segment failure Retry button was not rendered.");
+    }
+
+    button.click();
+    await vi.waitFor(() => {
+      expect(failure.textContent).toContain(
+        "Access to the configured provider origin is not granted.",
+      );
+    });
+    expect(failure.querySelector("button")).toBeNull();
+    expect(failure.hasAttribute("aria-busy")).toBe(false);
+    button.click();
+    expect(requestTranslations).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not render a stale manual retry after Clear cancels its generation", async () => {
+    document.body.innerHTML = `<p>Readable paragraph with cancellable manual retry.</p>`;
+    const pending = deferred<unknown>();
+    const requests: TranslationRequest[] = [];
+    const operationIds: string[] = [];
+    const cancelTranslation = vi.fn(() => Promise.resolve());
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "manual-clear" }),
+      requestTranslations: (request, operationId) => {
+        operationIds.push(operationId);
+        requests.push(request);
+        return requests.length === 1
+          ? Promise.resolve(
+              successResponse([
+                {
+                  id: request.segments[0]?.id ?? "missing",
+                  status: "failure",
+                  error: createError("NETWORK_ERROR"),
+                },
+              ]),
+            )
+          : pending.promise;
+      },
+      cancelTranslation,
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+    document.querySelector<HTMLButtonElement>("button")?.click();
+    await expect(
+      controller.handleMessage(createContentCommand("clear")),
+    ).resolves.toMatchObject({ ok: true, state: { translationCount: 0 } });
+    expect(cancelTranslation).toHaveBeenCalledWith(operationIds[1]);
+
+    const segment = requests[1]?.segments[0];
+    if (segment === undefined) {
+      throw new Error("Pending manual retry was not captured.");
+    }
+    pending.resolve(
+      successResponse([
+        {
+          id: segment.id,
+          status: "success",
+          translatedText: "Must not reappear",
+        },
+      ]),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(
+      document.querySelector(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
+    ).toBeNull();
+    expect(document.body.textContent).not.toContain("Must not reappear");
+  });
+
+  it("cancels a manual retry waiting on settings before it can call the provider", async () => {
+    document.body.innerHTML = `<p>Readable paragraph with deferred manual retry settings.</p>`;
+    const manualSettings = deferred<ContentSettings>();
+    const loadContentSettings = vi
+      .fn<() => Promise<ContentSettings>>()
+      .mockResolvedValueOnce({
+        retry: DEFAULT_RETRY_SETTINGS,
+        appearance: DEFAULT_APPEARANCE_SETTINGS,
+        uiLanguage: "en",
+      })
+      .mockReturnValueOnce(manualSettings.promise);
+    const operationIds: string[] = [];
+    const requestTranslations = vi.fn(
+      (request: TranslationRequest, operationId: string) => {
+        operationIds.push(operationId);
+        return Promise.resolve(
+          successResponse([
+            {
+              id: request.segments[0]?.id ?? "missing",
+              status: "failure",
+              error: createError("NETWORK_ERROR"),
+            },
+          ]),
+        );
+      },
+    );
+    const cancelTranslation = vi.fn(() => Promise.resolve());
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "manual-settings-clear" }),
+      requestTranslations,
+      cancelTranslation,
+      loadContentSettings,
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+    document.querySelector<HTMLButtonElement>("button")?.click();
+    await controller.handleMessage(createContentCommand("clear"));
+
+    expect(requestTranslations).toHaveBeenCalledOnce();
+    expect(cancelTranslation).toHaveBeenCalledOnce();
+    expect(cancelTranslation).not.toHaveBeenCalledWith(operationIds[0]);
+    manualSettings.resolve({
+      retry: DEFAULT_RETRY_SETTINGS,
+      appearance: DEFAULT_APPEARANCE_SETTINGS,
+      uiLanguage: "zh-CN",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(requestTranslations).toHaveBeenCalledOnce();
+    expect(
+      document.querySelector(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
+    ).toBeNull();
   });
 });

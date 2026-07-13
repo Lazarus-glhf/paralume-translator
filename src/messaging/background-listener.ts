@@ -1,7 +1,11 @@
 import { sanitizeError } from "../shared/errors";
 import { createErrorResponse } from "./protocol";
+import type { BackgroundMessageContext } from "./background-handler";
 
-export type BackgroundMessageHandler = (message: unknown) => Promise<unknown>;
+export type BackgroundMessageHandler<Sender = unknown> = (
+  message: unknown,
+  context: BackgroundMessageContext<Sender>,
+) => Promise<unknown>;
 
 export type BackgroundRuntimeListener<Sender> = (
   message: unknown,
@@ -15,11 +19,11 @@ export interface BackgroundMessageEvent<Sender> {
 
 export function registerBackgroundMessageListener<Sender>(
   onMessage: BackgroundMessageEvent<Sender>,
-  handleMessage: BackgroundMessageHandler,
+  handleMessage: BackgroundMessageHandler<Sender>,
 ): void {
-  onMessage.addListener((message, _sender, sendResponse) => {
+  onMessage.addListener((message, sender, sendResponse) => {
     void Promise.resolve()
-      .then(() => handleMessage(message))
+      .then(() => handleMessage(message, { sender }))
       .then(
         (response) => {
           sendResponse(response);
