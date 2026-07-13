@@ -4,6 +4,7 @@ node_modules/
 # WXT generated files and packaged extensions
 .output/
 .wxt/
+release-assets/
 
 # Test output
 coverage/

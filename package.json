@@ -1,6 +1,6 @@
 {
   "name": "paralume-translator",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "A local-first bilingual webpage translator for Chrome and Edge.",
   "type": "module",
@@ -16,6 +16,8 @@
     "build:edge": "wxt build -b edge",
     "zip": "wxt zip",
     "zip:edge": "wxt zip -b edge",
+    "release:metadata": "node scripts/release-metadata.mjs",
+    "release:package": "wxt zip && wxt zip -b edge && node scripts/prepare-release-assets.mjs",
     "prepare": "wxt prepare",
     "typecheck": "wxt prepare && tsc --noEmit",
     "test": "vitest run",

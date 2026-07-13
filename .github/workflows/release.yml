@@ -1,0 +1,162 @@
+name: Prerelease
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact package.json version to release (for example, 0.0.1)
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: prerelease-${{ github.event_name }}-${{ github.ref_name }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Verify and package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      CI: true
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      release_sha: ${{ steps.trusted-main.outputs.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Verify release commit is origin/main HEAD
+        id: trusted-main
+        shell: bash
+        env:
+          TRUSTED_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          git remote set-url origin "$TRUSTED_REPOSITORY_URL"
+          git fetch --no-tags --depth=1 --no-write-fetch-head origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          trusted_main_sha="$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')"
+          if [[ "$GITHUB_SHA" != "$trusted_main_sha" ]]; then
+            echo "Release commit $GITHUB_SHA is not origin/main HEAD $trusted_main_sha." >&2
+            exit 1
+          fi
+          printf 'sha=%s\n' "$trusted_main_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Enable pinned pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.9.0 --activate
+          test "$(pnpm --version)" = "11.9.0"
+
+      - name: Validate release identity
+        id: metadata
+        env:
+          RELEASE_VERSION_INPUT: ${{ inputs.version }}
+          TRUSTED_MAIN_SHA: ${{ steps.trusted-main.outputs.sha }}
+        run: node scripts/release-metadata.mjs
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium and Linux dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run full release gate
+        run: pnpm verify
+
+      - name: Build browser ZIPs, validate them, and create checksums
+        run: pnpm release:package
+
+      - name: Upload Playwright failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/playwright
+            playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload validated release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: paralume-release-${{ steps.metadata.outputs.version }}
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Create GitHub prerelease
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: prerelease
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.package.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.package.outputs.version }}
+      RELEASE_SHA: ${{ needs.package.outputs.release_sha }}
+      ASSET_PREFIX: paralume-translator-${{ needs.package.outputs.version }}
+    steps:
+      - name: Download validated release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: paralume-release-${{ needs.package.outputs.version }}
+          path: release-assets
+
+      - name: Verify downloaded checksums
+        working-directory: release-assets
+        run: sha256sum --check "${ASSET_PREFIX}-SHA256SUMS.txt"
+
+      - name: Create prerelease from existing tag
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "release-assets/${ASSET_PREFIX}-chrome.zip" \
+            "release-assets/${ASSET_PREFIX}-edge.zip" \
+            "release-assets/${ASSET_PREFIX}-SHA256SUMS.txt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Paralume ${RELEASE_VERSION}" \
+            --notes "Alpha prerelease for tester installation. Verify downloads with the attached SHA-256 checksums." \
+            --prerelease \
+            --verify-tag
+
+      - name: Create prerelease and tag from manual dispatch
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            --field "ref=refs/tags/${RELEASE_TAG}" \
+            --field "sha=${RELEASE_SHA}"
+          gh release create "$RELEASE_TAG" \
+            "release-assets/${ASSET_PREFIX}-chrome.zip" \
+            "release-assets/${ASSET_PREFIX}-edge.zip" \
+            "release-assets/${ASSET_PREFIX}-SHA256SUMS.txt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Paralume ${RELEASE_VERSION}" \
+            --notes "Alpha prerelease for tester installation. Verify downloads with the attached SHA-256 checksums." \
+            --prerelease \
+            --verify-tag

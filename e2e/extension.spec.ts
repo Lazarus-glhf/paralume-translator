@@ -190,11 +190,15 @@ test("local fixture server exposes the deterministic article", async ({
   expect(html).toMatch(/&lt;img\s+id="mock-output-node"/u);
 });
 
-test("generated Chrome manifest keeps provider origins optional and runtime-granted", async () => {
+test("generated Chrome manifest matches package version and keeps provider origins optional", async () => {
   const manifest = JSON.parse(
     await readFile(join(extensionPath, "manifest.json"), "utf8"),
   ) as Record<string, unknown>;
+  const packageJson = JSON.parse(
+    await readFile(resolve("package.json"), "utf8"),
+  ) as Record<string, unknown>;
 
+  expect(manifest["version"]).toBe(packageJson["version"]);
   expect(manifest["permissions"]).toEqual([
     "activeTab",
     "scripting",

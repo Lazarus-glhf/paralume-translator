@@ -11,6 +11,39 @@ explicitly selects it for development; Paralume never falls back to Mock after
 a real provider configuration or request failure. Mock output is prefixed with
 `【Mock zh-CN】` so it cannot be mistaken for real translation.
 
+Paralume is currently an **alpha prerelease** intended for tester feedback.
+GitHub Releases provide reviewed Chrome and Edge ZIP assets for unpacked
+installation. Chrome Web Store and Microsoft Edge Add-ons publishing are not
+automated or part of the current release workflow.
+
+## Tester installation from GitHub Releases
+
+1. Open the repository's
+   [GitHub Releases](https://github.com/Lazarus-glhf/paralume-translator/releases)
+   page and select the intended prerelease.
+2. Download the ZIP for your browser, named like
+   `paralume-translator-0.0.1-chrome.zip` or
+   `paralume-translator-0.0.1-edge.zip`, plus the matching
+   `SHA256SUMS.txt` file.
+3. Verify the ZIP's SHA-256 digest against its line in the checksum file. For
+   example, use `sha256sum <zip>` on Linux, `shasum -a 256 <zip>` on macOS,
+   or `Get-FileHash <zip> -Algorithm SHA256` in PowerShell.
+4. Extract the ZIP into a permanent local folder. Do not select the ZIP itself
+   in the browser and do not delete the extracted folder while the extension is
+   installed.
+5. In Chrome, open `chrome://extensions`; in Edge, open `edge://extensions`.
+   Enable **Developer mode**, choose **Load unpacked**, and select the extracted
+   folder containing `manifest.json`.
+
+Unpacked prereleases do not update automatically. Repeat the download,
+verification, and unpacked installation steps for a newer prerelease.
+
+Paralume is BYOK software. Real-provider API keys are stored in
+`chrome.storage.local` in the local browser profile, which is **not an encrypted
+vault**. Use a limited-purpose key, review provider quota and billing controls,
+and clear the key from Options when it is no longer needed. The deterministic
+Mock provider needs no credential and never contacts a translation provider.
+
 ## Current functionality
 
 Open the popup and explicitly choose an action:
@@ -198,6 +231,64 @@ pnpm build:edge
 
 WXT writes unpacked builds beneath `.output/chrome-mv3` and
 `.output/edge-mv3`.
+
+## Prerelease packaging and versioning
+
+`package.json` is the single release-version source. It uses canonical numeric
+SemVer such as `0.0.1`, which is also valid as a Chromium manifest version. The
+first Alpha is version `0.0.1` and tag `v0.0.1`; the future first stable release
+will use `0.1.0`. WXT derives both generated Chrome and Edge manifest versions
+from that value; do not add a duplicate hard-coded version to `wxt.config.ts`.
+
+To simulate release packaging locally after installing Playwright:
+
+```sh
+pnpm verify
+pnpm release:metadata
+pnpm release:package
+```
+
+`pnpm release:package` rebuilds both WXT ZIPs, validates the unpacked and zipped
+manifests, checks required archive paths, and writes stable browser ZIPs plus a
+SHA-256 checksum file beneath `release-assets/`.
+
+For a tag-driven prerelease, update only the `package.json` version and lockfile
+if needed, complete review and verification on `main`, then create the exact
+matching tag `v<package-version>` (for example, `v0.0.1`). Pushing that tag runs
+the release gate and creates an Alpha GitHub prerelease. A mismatched,
+non-canonical, or placeholder version fails before packaging.
+
+The workflow can also be dispatched manually from `main` with an exact version
+input matching `package.json`. After the same gate passes, the final job creates
+the matching tag and GitHub prerelease at the dispatched commit. Only that final
+job receives `contents: write`; verification and packaging have read-only
+repository access.
+
+Before any release scripts, dependency installation, packaging, or release
+creation, the workflow checks out the immutable `GITHUB_SHA` without persisting
+checkout credentials, fetches only `refs/heads/main` from `origin` at depth 1,
+and requires the release commit to equal the fetched `origin/main` HEAD. This
+exact HEAD policy applies to both matching tag pushes and manual dispatches
+from `main`; manual tag creation targets the already validated commit output.
+
+The final release job targets the GitHub Environment named `prerelease`.
+Repository owners should create that environment and configure required
+reviewers for manual approval where their GitHub plan supports protection
+rules. Merely naming the environment does not enforce approval until those
+rules are configured.
+
+For a manual dispatch, the final job creates the exact lightweight tag through
+the GitHub API at the previously validated `origin/main` HEAD. Tag creation
+fails if that name already exists, preventing a manual release from silently
+reusing a tag that points at a different commit.
+
+The release gate performs a frozen pnpm install, the complete deterministic
+verification suite, both browser ZIP builds, manifest permission/version
+validation, archive inspection, checksum creation, and checksum revalidation
+after artifact transfer. It uploads only Playwright diagnostics on failure and
+does not use provider credentials or secrets. GitHub Release assets are the
+only automated distribution output for now; store submission remains a manual,
+future milestone.
 
 ## Verification
 
