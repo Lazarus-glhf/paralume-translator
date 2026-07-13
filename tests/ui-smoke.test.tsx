@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App as OptionsApp } from "../entrypoints/options/App";
 import { App as PopupApp } from "../entrypoints/popup/App";
 import type { ContentResponse } from "../src/messaging/protocol";
+import type { OptionsClient } from "../src/options/client";
+import { DEFAULT_PROVIDER_SETTINGS } from "../src/settings/repository";
+import type { PublicProviderSettings } from "../src/settings/types";
 
 const mountedRoots: Root[] = [];
 
@@ -174,13 +177,169 @@ describe("extension UI", () => {
     ).toBe(true);
   });
 
-  it("identifies Mock mode honestly without speculative settings", () => {
-    const options = render(<OptionsApp />);
+  it("loads configured credentials as masked, empty inputs", async () => {
+    const loadedSettings: PublicProviderSettings = {
+      version: 1,
+      provider: "openai",
+      openai: {
+        baseUrl: DEFAULT_PROVIDER_SETTINGS.openai.baseUrl,
+        model: DEFAULT_PROVIDER_SETTINGS.openai.model,
+        protocol: DEFAULT_PROVIDER_SETTINGS.openai.protocol,
+        reasoningEffort: DEFAULT_PROVIDER_SETTINGS.openai.reasoningEffort,
+        apiKeyConfigured: true,
+      },
+      microsoft: {
+        endpoint: DEFAULT_PROVIDER_SETTINGS.microsoft.endpoint,
+        region: DEFAULT_PROVIDER_SETTINGS.microsoft.region,
+        apiKeyConfigured: false,
+      },
+    };
+    const client: OptionsClient = {
+      load: vi.fn(() => Promise.resolve(loadedSettings)),
+      save: vi.fn(),
+      clearApiKey: vi.fn(),
+      testConnection: vi.fn(),
+    };
+    const options = render(<OptionsApp client={client} />);
 
-    expect(options.querySelector("h1")?.textContent).toBe("Options");
-    expect(options.querySelector('[role="status"]')?.textContent).toContain(
-      "Mock provider",
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const keyInput = options.querySelector<HTMLInputElement>(
+      'input[name="openaiApiKey"]',
     );
-    expect(options.querySelectorAll("input, select, textarea")).toHaveLength(0);
+    expect(options.querySelector("h1")?.textContent).toBe("Options");
+    expect(keyInput?.type).toBe("password");
+    expect(keyInput?.value).toBe("");
+    expect(keyInput?.placeholder).toContain("configured");
+    expect(options.textContent).not.toContain("background-only-test-key");
+  });
+
+  it("submits replacement keys, reports save status, and clears them explicitly", async () => {
+    const publicSettings = {
+      version: 1 as const,
+      provider: "openai" as const,
+      openai: {
+        ...DEFAULT_PROVIDER_SETTINGS.openai,
+        apiKeyConfigured: false,
+      },
+      microsoft: {
+        ...DEFAULT_PROVIDER_SETTINGS.microsoft,
+        apiKeyConfigured: false,
+      },
+    };
+    const client: OptionsClient = {
+      load: vi.fn(() => Promise.resolve(publicSettings)),
+      save: vi.fn(() =>
+        Promise.resolve({
+          settings: {
+            ...publicSettings,
+            openai: { ...publicSettings.openai, apiKeyConfigured: true },
+          },
+          message: "Settings saved.",
+        }),
+      ),
+      clearApiKey: vi.fn(() =>
+        Promise.resolve({
+          settings: publicSettings,
+          message: "OpenAI-compatible API key cleared.",
+        }),
+      ),
+      testConnection: vi.fn(),
+    };
+    const options = render(<OptionsApp client={client} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const keyInput = options.querySelector<HTMLInputElement>(
+      'input[name="openaiApiKey"]',
+    );
+    await act(async () => {
+      if (keyInput !== null) {
+        Reflect.set(
+          HTMLInputElement.prototype,
+          "value",
+          "replacement-test-key",
+          keyInput,
+        );
+        keyInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      options
+        .querySelector<HTMLButtonElement>('button[data-action="save"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(client.save).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai" }),
+      { openaiApiKey: "replacement-test-key" },
+    );
+    expect(options.querySelector('[role="status"]')?.textContent).toContain(
+      "Settings saved",
+    );
+    expect(keyInput?.value).toBe("");
+
+    await act(async () => {
+      options
+        .querySelector<HTMLButtonElement>(
+          'button[data-action="clear-openai-key"]',
+        )
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(client.clearApiKey).toHaveBeenCalledWith("openai");
+  });
+
+  it("does not render arbitrary Options client exception details", async () => {
+    const publicSettings = {
+      version: 1 as const,
+      provider: "mock" as const,
+      openai: {
+        ...DEFAULT_PROVIDER_SETTINGS.openai,
+        apiKeyConfigured: false,
+      },
+      microsoft: {
+        ...DEFAULT_PROVIDER_SETTINGS.microsoft,
+        apiKeyConfigured: false,
+      },
+    };
+    const client: OptionsClient = {
+      load: vi.fn(() => Promise.resolve(publicSettings)),
+      save: vi.fn(() =>
+        Promise.reject(
+          new Error(
+            "LEAK_SECRET_6be1 https://private.invalid LEAK_PAGE_TEXT_88",
+          ),
+        ),
+      ),
+      clearApiKey: vi.fn(),
+      testConnection: vi.fn(),
+    };
+    const options = render(<OptionsApp client={client} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      options
+        .querySelector<HTMLButtonElement>('button[data-action="save"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(options.querySelector('[role="alert"]')?.textContent).toBe(
+      "Paralume could not complete the request.",
+    );
+    expect(options.textContent).not.toMatch(
+      /LEAK_SECRET|private\.invalid|LEAK_PAGE_TEXT/u,
+    );
   });
 });

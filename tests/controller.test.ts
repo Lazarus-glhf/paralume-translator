@@ -11,6 +11,7 @@ import type {
   TranslationRequest,
   TranslationResult,
 } from "../src/shared/types";
+import { createError } from "../src/shared/errors";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -65,11 +66,7 @@ describe("content controller workflow", () => {
           {
             id: second.id,
             status: "failure",
-            error: {
-              code: "TRANSLATION_FAILED",
-              message: "Mock partial failure.",
-              retryable: false,
-            },
+            error: createError("TRANSLATION_FAILED"),
           },
           {
             id: first.id,
@@ -101,7 +98,9 @@ describe("content controller workflow", () => {
     ).toBe("Translated first paragraph.");
     expect(
       document.querySelector("#second")?.nextElementSibling?.textContent,
-    ).toBe("Translation unavailable. Mock partial failure.");
+    ).toBe(
+      "Translation unavailable. The translation request failed. Check the provider settings and try again.",
+    );
     expect(
       document.querySelectorAll("pre [data-paralume-source-id]"),
     ).toHaveLength(0);
@@ -238,6 +237,31 @@ describe("content controller workflow", () => {
       ok: false,
       error: { code: "INVALID_MESSAGE" },
     });
+  });
+
+  it("does not expose rejected runtime exception details to page responses", async () => {
+    document.body.innerHTML = `<p>Readable paragraph containing private page text.</p>`;
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "safe-runtime-error" }),
+      requestTranslations: () =>
+        Promise.reject(
+          new Error(
+            "LEAK_SECRET_c7a1 https://private.invalid LEAK_PAGE_TEXT_42",
+          ),
+        ),
+    });
+
+    const response = await controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    expect(response).toMatchObject({
+      ok: false,
+      error: createError("TRANSLATION_FAILED"),
+    });
+    expect(JSON.stringify(response)).not.toMatch(
+      /LEAK_SECRET|private\.invalid|LEAK_PAGE_TEXT/u,
+    );
   });
 
   it("coalesces concurrent translate commands into one provider request", async () => {

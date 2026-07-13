@@ -24,10 +24,7 @@ export class MockTranslationProvider implements TranslationProvider {
           return {
             id: segment.id,
             status: "failure",
-            error: createError(
-              "TRANSLATION_FAILED",
-              `Mock failure for ${segment.id}.`,
-            ),
+            error: createError("TRANSLATION_FAILED"),
           };
         }
 

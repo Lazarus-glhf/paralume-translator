@@ -21,6 +21,12 @@ body {
   margin: 0;
 }
 
+button,
+input,
+select {
+  font: inherit;
+}
+
 .options {
   width: min(720px, calc(100% - 40px));
   margin: 0 auto;
@@ -65,6 +71,83 @@ p {
   line-height: 1.65;
 }
 
+label {
+  display: grid;
+  gap: 7px;
+  color: #29483b;
+  font-weight: 700;
+}
+
+input,
+select {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid #bdcbc3;
+  border-radius: 9px;
+  background: #fff;
+  color: #183028;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 3px solid #d39a4a;
+  outline-offset: 2px;
+}
+
+.provider-fields {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e0e6e2;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+button {
+  min-height: 42px;
+  padding: 10px 14px;
+  border: 1px solid #315b49;
+  border-radius: 10px;
+  background: #315b49;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button.secondary {
+  border-color: #bdcbc3;
+  background: #fffdf8;
+  color: #29483b;
+}
+
+button.danger {
+  justify-self: start;
+  color: #8a3a34;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.storage-warning {
+  margin: 24px 0 0;
+  padding: 14px;
+  border: 1px solid #e5c990;
+  border-radius: 10px;
+  background: #fff8e8;
+  color: #684f23;
+  font-size: 0.875rem;
+}
+
 .notice {
   margin: 20px 0 0;
   padding-top: 16px;
@@ -87,6 +170,38 @@ p {
     border-color: #3b5147;
     background: #22322b;
     box-shadow: none;
+  }
+
+  label {
+    color: #d7e7de;
+  }
+
+  input,
+  select {
+    border-color: #50675c;
+    background: #17221e;
+    color: #eef6f1;
+  }
+
+  .provider-fields,
+  .notice {
+    border-color: #3b5147;
+  }
+
+  button.secondary {
+    border-color: #50675c;
+    background: #22322b;
+    color: #bdd0c6;
+  }
+
+  button.danger {
+    color: #f2b6b0;
+  }
+
+  .storage-warning {
+    border-color: #6c5a35;
+    background: #312b20;
+    color: #e8d5a6;
   }
 
   .notice {

@@ -6,6 +6,7 @@ import type {
 } from "../../src/messaging/protocol";
 import { runPageCommand } from "../../src/popup/client";
 import type { ContentState } from "../../src/shared/types";
+import { sanitizeStructuredError } from "../../src/shared/errors";
 
 export interface AppProps {
   runCommand?: (command: ContentCommand) => Promise<ContentResponse>;
@@ -36,7 +37,7 @@ export function App({ runCommand = runPageCommand }: AppProps) {
         setPageState(response.state);
         setStatus(response.message);
       } else {
-        setError(response.error.message);
+        setError(sanitizeStructuredError(response.error).message);
       }
     } catch {
       setStatus("The page action did not complete.");
@@ -48,10 +49,11 @@ export function App({ runCommand = runPageCommand }: AppProps) {
 
   return (
     <main className="popup" aria-labelledby="popup-title" aria-busy={busy}>
-      <p className="eyebrow">Bilingual reading with Mock mode</p>
+      <p className="eyebrow">Local-first bilingual reading</p>
       <h1 id="popup-title">Paralume</h1>
       <p className="summary">
-        Add deterministic Mock translations below readable blocks on this page.
+        Add translations from your selected provider below readable blocks on
+        this page.
       </p>
 
       <div className="actions" aria-label="Page translation controls">

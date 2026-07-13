@@ -227,7 +227,7 @@ describe("background translation message handling", () => {
       ok: false,
       error: {
         code: "INVALID_MESSAGE",
-        message: "The background translation request is malformed.",
+        message: "The request or response was malformed.",
         retryable: false,
       },
     });
@@ -320,8 +320,7 @@ describe("background listener registration", () => {
       ok: false,
       error: {
         code: "INTERNAL_ERROR",
-        message:
-          "The background listener could not process the message: Unexpected listener failure",
+        message: "Paralume could not complete the request.",
         retryable: true,
       },
     });

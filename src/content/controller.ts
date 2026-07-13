@@ -7,7 +7,7 @@ import {
   parseContentCommand,
   parseTranslationResponse,
 } from "../messaging/validation";
-import { createError, messageFromUnknown } from "../shared/errors";
+import { createError, sanitizeError } from "../shared/errors";
 import {
   countPageRequestPrefix,
   DEFAULT_PAGE_REQUEST_LIMITS,
@@ -59,12 +59,11 @@ function success(
 function resultFailure(
   segment: SourceSegment,
   code: "MISSING_RESULT" | "DUPLICATE_RESULT",
-  message: string,
 ): TranslationFailure {
   return {
     id: segment.id,
     status: "failure",
-    error: createError(code, message, true),
+    error: createError(code),
   };
 }
 
@@ -83,24 +82,13 @@ function mapResultsById(
   return new Map(
     segments.map((segment) => {
       if ((counts.get(segment.id) ?? 0) > 1) {
-        return [
-          segment.id,
-          resultFailure(
-            segment,
-            "DUPLICATE_RESULT",
-            `More than one translation was returned for ${segment.id}.`,
-          ),
-        ];
+        return [segment.id, resultFailure(segment, "DUPLICATE_RESULT")];
       }
 
       return [
         segment.id,
         providerResults.get(segment.id) ??
-          resultFailure(
-            segment,
-            "MISSING_RESULT",
-            `No translation was returned for ${segment.id}.`,
-          ),
+          resultFailure(segment, "MISSING_RESULT"),
       ];
     }),
   );
@@ -214,13 +202,7 @@ export function createContentController(
         return cancelled();
       }
 
-      return createErrorResponse(
-        createError(
-          "TRANSLATION_FAILED",
-          `The page could not be translated: ${messageFromUnknown(error)}`,
-          true,
-        ),
-      );
+      return createErrorResponse(sanitizeError(error, "TRANSLATION_FAILED"));
     }
   };
 

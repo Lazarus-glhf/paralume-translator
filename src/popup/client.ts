@@ -56,33 +56,17 @@ export async function runPageCommand(
       currentWindow: true,
     });
   } catch {
-    return createErrorResponse(
-      createError(
-        "NO_ACTIVE_TAB",
-        "Paralume could not read the active browser tab. Try reopening the popup.",
-        true,
-      ),
-    );
+    return createErrorResponse(createError("NO_ACTIVE_TAB"));
   }
 
   const activeTab = tabs[0];
 
   if (activeTab?.id === undefined) {
-    return createErrorResponse(
-      createError(
-        "NO_ACTIVE_TAB",
-        "Paralume could not find an active browser tab.",
-      ),
-    );
+    return createErrorResponse(createError("NO_ACTIVE_TAB"));
   }
 
   if (!isAllowedPage(activeTab.url)) {
-    return createErrorResponse(
-      createError(
-        "RESTRICTED_PAGE",
-        "Paralume cannot run on browser-internal, extension, or other restricted pages. Open a regular webpage and try again.",
-      ),
-    );
+    return createErrorResponse(createError("RESTRICTED_PAGE"));
   }
 
   try {
@@ -91,12 +75,7 @@ export async function runPageCommand(
       files: [INJECTED_SCRIPT_PATH],
     });
   } catch {
-    return createErrorResponse(
-      createError(
-        "INJECTION_FAILED",
-        "Paralume could not access this page. Browser-protected pages and file URLs without extension access cannot be translated.",
-      ),
-    );
+    return createErrorResponse(createError("INJECTION_FAILED"));
   }
 
   try {
@@ -107,12 +86,6 @@ export async function runPageCommand(
     const parsed = parseContentResponse(rawResponse);
     return parsed.ok ? parsed.value : createErrorResponse(parsed.error);
   } catch {
-    return createErrorResponse(
-      createError(
-        "INJECTION_FAILED",
-        "Paralume injected the page helper but could not reach it. Reload the page and try again.",
-        true,
-      ),
-    );
+    return createErrorResponse(createError("INJECTION_FAILED"));
   }
 }

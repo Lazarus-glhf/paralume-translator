@@ -1,5 +1,7 @@
 import {
   createError,
+  isErrorCode,
+  SAFE_ERROR_MESSAGES,
   type ErrorCode,
   type StructuredError,
 } from "../shared/errors";
@@ -24,23 +26,14 @@ import {
 export type ValidationResult<T> =
   { ok: true; value: T } | { ok: false; error: StructuredError };
 
-const ERROR_CODES: ReadonlySet<ErrorCode> = new Set([
-  "INVALID_MESSAGE",
-  "NO_ACTIVE_TAB",
-  "RESTRICTED_PAGE",
-  "INJECTION_FAILED",
-  "TRANSLATION_FAILED",
-  "REQUEST_LIMIT_EXCEEDED",
-  "SEGMENT_TOO_LARGE",
-  "MISSING_RESULT",
-  "DUPLICATE_RESULT",
-  "INTERNAL_ERROR",
-]);
+const ERROR_CODES: ReadonlySet<ErrorCode> = new Set(
+  Object.keys(SAFE_ERROR_MESSAGES) as ErrorCode[],
+);
 
-function invalid(message: string): ValidationResult<never> {
+function invalid(): ValidationResult<never> {
   return {
     ok: false,
-    error: createError("INVALID_MESSAGE", message),
+    error: createError("INVALID_MESSAGE"),
   };
 }
 
@@ -100,10 +93,10 @@ function isStructuredError(value: unknown): value is StructuredError {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, ["code", "message", "retryable"]) &&
-    typeof value["code"] === "string" &&
-    ERROR_CODES.has(value["code"] as ErrorCode) &&
-    isNonEmptyString(value["message"], 2_000) &&
-    typeof value["retryable"] === "boolean"
+    isErrorCode(value["code"]) &&
+    ERROR_CODES.has(value["code"]) &&
+    value["message"] === SAFE_ERROR_MESSAGES[value["code"]] &&
+    value["retryable"] === createError(value["code"]).retryable
   );
 }
 
@@ -163,7 +156,7 @@ export function parseBackgroundRequest(
     value["command"] !== "translate" ||
     !isTranslationRequest(value["request"])
   ) {
-    return invalid("The background translation request is malformed.");
+    return invalid();
   }
 
   return { ok: true, value: value as unknown as BackgroundTranslationMessage };
@@ -181,7 +174,7 @@ export function parseContentCommand(
       value["command"] as ContentCommand,
     )
   ) {
-    return invalid("The page command is malformed.");
+    return invalid();
   }
 
   return { ok: true, value: value as unknown as ContentCommandMessage };
@@ -191,7 +184,7 @@ export function parseTranslationResponse(
   value: unknown,
 ): ValidationResult<TranslationResponse> {
   if (!isRecord(value)) {
-    return invalid("The translation response is malformed.");
+    return invalid();
   }
 
   if (isErrorResponse(value)) {
@@ -208,14 +201,14 @@ export function parseTranslationResponse(
     return { ok: true, value: value as unknown as TranslationResponse };
   }
 
-  return invalid("The translation response is malformed.");
+  return invalid();
 }
 
 export function parseContentResponse(
   value: unknown,
 ): ValidationResult<ContentResponse> {
   if (!isRecord(value)) {
-    return invalid("The page response is malformed.");
+    return invalid();
   }
 
   if (isErrorResponse(value)) {
@@ -232,5 +225,5 @@ export function parseContentResponse(
     return { ok: true, value: value as unknown as ContentResponse };
   }
 
-  return invalid("The page response is malformed.");
+  return invalid();
 }

@@ -1,14 +1,15 @@
 # Paralume
 
 Paralume（并译）is a local-first bilingual webpage translator for Chrome and
-Edge. Milestone 1 implements a complete, deterministic Mock translation loop:
-extract readable page blocks, send validated requests to the background service
-worker, batch them, generate Mock output, and place each translation directly
-with its original block.
+Edge. It extracts readable page blocks, sends validated requests to the
+background service worker, batches provider work, and places each translation
+directly with its original block.
 
-The Mock provider proves the extension workflow but does **not** perform real
-translation. Its deterministic output is prefixed with `【Mock zh-CN】` so it
-cannot be mistaken for a production translation service.
+Milestone 2 adds selectable OpenAI-compatible and Microsoft Translator BYOK
+providers. The deterministic Mock provider remains available only when the user
+explicitly selects it for development; Paralume never falls back to Mock after
+a real provider configuration or request failure. Mock output is prefixed with
+`【Mock zh-CN】` so it cannot be mistaken for real translation.
 
 ## Current functionality
 
@@ -30,8 +31,47 @@ newer translation state. Toggle always updates the translations currently
 present; pending results use that visibility when they finish. If no translation
 exists yet, Toggle is a no-op and pending results remain visible.
 
-The Options page honestly reports that Mock mode is active and exposes no API
-key or provider settings.
+The Options page selects the provider, edits provider-specific settings, saves
+or clears masked credentials, and runs a one-segment connection test. A blank
+masked key field preserves an existing stored key; the key itself is never read
+back into Options.
+
+## Provider settings
+
+Provider settings are versioned and stored in `chrome.storage.local`:
+
+- **Mock** is deterministic development output and must be selected explicitly.
+- **OpenAI-compatible** accepts an HTTPS Base URL, model, reasoning effort, API
+  key, and a user-selected protocol: Responses (`/responses`) or Chat
+  Completions (`/chat/completions`). The selected endpoint must support strict
+  `json_schema` output and the chosen protocol's reasoning field
+  (`reasoning.effort` for Responses or `reasoning_effort` for Chat
+  Completions). Chat content may be a string or an array containing only common
+  text parts; other content parts are rejected. Paralume requires stable
+  segment IDs and rejects missing, duplicate, unknown, or additional fields.
+- **Microsoft Translator** accepts an HTTPS Endpoint, API Key, and Region. It
+  calls Translator v3 at `/translate?api-version=3.0&to=zh-Hans` and sends the
+  Azure subscription key and region headers.
+
+Credentials are stored locally in the browser profile. `chrome.storage.local`
+is **not an encrypted vault**; anyone or any software with access to the browser
+profile may be able to recover its contents. Options receives only
+`apiKeyConfigured` flags from the background and provides explicit per-provider
+clear buttons. Content scripts receive neither provider configuration nor
+credentials.
+
+OpenAI-compatible batches remain bounded at 20 segments and 6,000 source
+characters. Malformed JSON, malformed structured output, missing IDs, duplicate
+IDs, and partial batches fail the whole batch clearly. Milestone 2 does not
+retry one request per segment and does not automatically switch providers. The
+connection test sends the short text `Paralume connection test.` and may consume
+provider quota.
+
+Provider, fetch, storage, permission, and background exceptions are converted
+to an allowlisted structured error code with a fixed safe message before they
+cross a runtime boundary. Upstream exception text, causes, URLs, response
+bodies, credentials, and source-page text are never included in settings,
+translation, per-segment failure, content-controller, or popup error responses.
 
 ## Page eligibility
 
@@ -66,15 +106,17 @@ used by themselves to exclude content.
 
 - WXT packages Manifest V3 extensions for Chrome and Edge.
 - React is limited to Popup and Options.
-- Extraction, eligibility, protocol validation, provider contracts, Mock
-  translation, batching, rendering, cleanup, and the page controller are strict,
-  framework-independent TypeScript.
+- Extraction, eligibility, protocol validation, provider contracts, HTTP
+  providers, batching, rendering, cleanup, settings, and the page controller
+  are strict, framework-independent TypeScript.
 - The popup queries the active tab only after a user action, injects the WXT
   unlisted `paralume.js` artifact with `browser.scripting.executeScript`, and
   sends a validated page command.
 - The page runtime extracts source segments and sends only validated translation
   requests to the background service worker.
-- The background service worker owns provider execution. Content scripts do not
+- The background service worker owns settings reads, provider selection, and
+  provider execution. Options submits replacement credentials through a
+  validated runtime message but never reads stored keys. Content scripts do not
   receive provider configuration or secrets.
 - Stable segment IDs come from a per-runtime element `WeakMap`. Duplicate text
   receives distinct IDs, and the same element keeps its ID across repeated
@@ -89,30 +131,44 @@ used by themselves to exclude content.
 
 ## Permissions
 
-The generated manifest requests exactly:
+The generated manifest requests these install-time extension permissions:
 
 - `activeTab` — temporary access to the current tab following an explicit
   extension action.
 - `scripting` — programmatic injection of `paralume.js` into that tab.
+- `storage` — versioned provider settings and local BYOK credential persistence.
 
-There are no broad `host_permissions` and no static `content_scripts`
-registration. Browser-internal, extension, and other restricted pages return a
-clear popup error instead of attempting injection.
+There are no granted `host_permissions` and no static `content_scripts`
+registration. The manifest declares `optional_host_permissions` as
+`https://*/*` because Chrome requires every potentially user-configured custom
+HTTPS endpoint to be covered by a static optional match pattern. This wildcard
+is not granted at install time. When real-provider settings are saved, Paralume
+derives and requests only the exact configured origin pattern, such as
+`https://api.example.com/*`; paths, queries, fragments, embedded credentials,
+and non-HTTPS endpoints are rejected. The background checks that exact grant
+again before every provider use, so a revoked permission produces a clear
+failure before any fetch. Saving a changed endpoint removes the previous exact
+origin grant so stale provider permissions do not accumulate.
+
+Browser-internal, extension, and other restricted pages return a clear popup
+error instead of attempting injection.
 
 ## Repository layout
 
 ```text
 entrypoints/
-  background.ts       Validated Mock provider service-worker boundary
+  background.ts       Validated settings/provider service-worker boundary
   paralume.ts         Unlisted, programmatically injected page runtime
-  options/            Minimal React Mock-mode information boundary
+  options/            React provider settings and masked credential UI
   popup/              React page controls and accessible status/error UI
 src/
   content/             Eligibility, extraction, rendering, cleanup, controller
-  messaging/           Runtime protocol, validation, background handler
+  messaging/           Translation/settings protocols, validation, routing
+  options/             Framework-independent Options runtime client
   popup/               Framework-independent popup command client
+  settings/            Versioned storage, validation, exact-origin permissions
   shared/              Shared types and structured errors
-  translation/         Provider contract, Mock provider, batching
+  translation/         Mock, OpenAI, Microsoft, registry, batching, HTTP safety
 tests/                 Vitest and happy-dom unit/integration tests
 e2e/                   Playwright extension tests and static fixture server
 ```
@@ -160,8 +216,14 @@ fixture server on `127.0.0.1:4173`, and runs the suite with Playwright's pinned
 Chromium. `pnpm verify` runs the complete format, lint, typecheck, unit, Chrome
 build, Edge build, and E2E sequence.
 
+Vitest includes a deterministic loopback HTTP server for OpenAI Responses, Chat
+Completions, and Microsoft Translator v3. It verifies request paths, structured
+payloads, authentication headers, ID mapping, malformed output, 429 responses,
+timeouts, and partial batches without contacting an external service.
+
 After each build, inspect the generated manifest and confirm that permissions
-are exactly `activeTab` and `scripting`, with no `host_permissions` or
+are exactly `activeTab`, `scripting`, and `storage`; optional host permissions
+are exactly `https://*/*`; and there are no `host_permissions` or
 `content_scripts` keys.
 
 The Playwright release gate opens the real fixture URL at
@@ -179,7 +241,17 @@ the fixture DOM. It does not pre-inject `paralume.js`, call the content runtime
 directly, use `setContent`, or substitute an extension page. With no static
 `content_scripts` and no `host_permissions`, the successful result exercises the
 production popup path: `tabs.query` → `scripting.executeScript(paralume.js)` →
-`tabs.sendMessage` → background Mock provider → safe page rendering.
+`tabs.sendMessage` → background selected-provider registry → safe page
+rendering. The deterministic release-gate page tests explicitly keep Mock
+selected and make no external provider calls.
+
+The Playwright suite also saves a clearly fake test credential through the real
+Options UI, verifies the exact-origin runtime grant, confirms the key never
+appears in the DOM or settings response, reopens Options, rotates to a second
+origin, and proves the old grant is removed. It then terminates the service
+worker, proves stored settings reload in the restarted worker, clears the key
+through the UI, reopens to verify it is no longer configured, revokes the exact
+origin, and confirms translation is blocked with a fixed safe permission error.
 
 A separate, clearly labeled lower-level content-runtime integration test still
 loads the fixture into an extension-owned page, injects the built runtime, and
@@ -187,22 +259,25 @@ sends runtime commands directly. It retains the detailed structural placement,
 text-only output, source-node/listener preservation, exclusion, idempotency,
 toggle, and cleanup assertions, but it does **not** claim to prove `activeTab` or
 the popup injection path. Restricted-page handling is also exercised through
-the React popup UI. The live OpenAI documentation compatibility check remains a
-separate Hermes verification step.
+the React popup UI. Live-provider compatibility remains a separate,
+credentialed verification step; it is not part of deterministic `pnpm verify`.
 
 ## Current limitations
 
-- Mock output is deterministic workflow proof, not a real translation.
-- Source language is fixed to automatic detection and the Mock target label is
-  fixed to `zh-CN`; there are no settings yet.
+- Source language is fixed to automatic detection and the target language is
+  fixed to Simplified Chinese (`zh-CN`, mapped to `zh-Hans` for Microsoft).
+- Custom provider endpoints are HTTPS-only. Chrome's platform model requires a
+  broad ungranted optional declaration in the manifest so arbitrary exact HTTPS
+  origins can be requested later.
+- Provider credentials are local BYOK values, not encrypted vault entries.
 - Extraction runs only when Translate is requested. Dynamically added content
-  is not observed automatically in Milestone 1.
+  is not observed automatically.
 - Complex real-world list/table layouts still need a broader compatibility test
   matrix beyond the deterministic fixture.
 - Browser-protected pages cannot be translated. Local `file:` pages also depend
   on the browser's per-extension file-access setting.
-- PDF, video/subtitle, OCR, accounts, cloud sync, payments, Firefox, and real
-  provider integration are out of scope.
+- PDF, video/subtitle, OCR, accounts, cloud sync, payments, and Firefox are out
+  of scope.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and [AGENTS.md](./AGENTS.md) before
 making changes.

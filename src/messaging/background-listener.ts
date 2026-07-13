@@ -1,9 +1,7 @@
-import { createError, messageFromUnknown } from "../shared/errors";
-import { createErrorResponse, type TranslationResponse } from "./protocol";
+import { sanitizeError } from "../shared/errors";
+import { createErrorResponse } from "./protocol";
 
-export type BackgroundMessageHandler = (
-  message: unknown,
-) => Promise<TranslationResponse>;
+export type BackgroundMessageHandler = (message: unknown) => Promise<unknown>;
 
 export type BackgroundRuntimeListener<Sender> = (
   message: unknown,
@@ -28,13 +26,7 @@ export function registerBackgroundMessageListener<Sender>(
         },
         (error: unknown) => {
           sendResponse(
-            createErrorResponse(
-              createError(
-                "INTERNAL_ERROR",
-                `The background listener could not process the message: ${messageFromUnknown(error)}`,
-                true,
-              ),
-            ),
+            createErrorResponse(sanitizeError(error, "INTERNAL_ERROR")),
           );
         },
       );

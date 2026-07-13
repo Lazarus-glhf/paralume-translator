@@ -1,4 +1,10 @@
-import { createError, messageFromUnknown } from "../shared/errors";
+import {
+  createError,
+  sanitizeError,
+  sanitizeStructuredError,
+  type ErrorCode,
+  type StructuredError,
+} from "../shared/errors";
 import type {
   SourceSegment,
   TranslationFailure,
@@ -27,21 +33,19 @@ function assertLimits(limits: BatchLimits): void {
   }
 }
 
-function failure(
-  segment: SourceSegment,
-  code:
-    | "SEGMENT_TOO_LARGE"
-    | "MISSING_RESULT"
-    | "DUPLICATE_RESULT"
-    | "TRANSLATION_FAILED",
-  message: string,
-  retryable = false,
-): TranslationFailure {
+function failure(segment: SourceSegment, code: ErrorCode): TranslationFailure {
   return {
     id: segment.id,
     status: "failure",
-    error: createError(code, message, retryable),
+    error: createError(code),
   };
+}
+
+function failureWithError(
+  segment: SourceSegment,
+  error: StructuredError,
+): TranslationFailure {
+  return { id: segment.id, status: "failure", error };
 }
 
 function createBatches(
@@ -67,14 +71,7 @@ function createBatches(
   for (const segment of segments) {
     if (segment.text.length > limits.maxCharacters) {
       flush();
-      immediateResults.set(
-        segment.id,
-        failure(
-          segment,
-          "SEGMENT_TOO_LARGE",
-          `Segment ${segment.id} exceeds the ${String(limits.maxCharacters)}-character batch limit.`,
-        ),
-      );
+      immediateResults.set(segment.id, failure(segment, "SEGMENT_TOO_LARGE"));
       continue;
     }
 
@@ -109,38 +106,28 @@ async function translateBatch(
 
     for (const result of providerResults) {
       counts.set(result.id, (counts.get(result.id) ?? 0) + 1);
-      byId.set(result.id, result);
+      byId.set(
+        result.id,
+        result.status === "failure"
+          ? {
+              id: result.id,
+              status: "failure",
+              error: sanitizeStructuredError(result.error),
+            }
+          : result,
+      );
     }
 
     return segments.map((segment) => {
       if ((counts.get(segment.id) ?? 0) > 1) {
-        return failure(
-          segment,
-          "DUPLICATE_RESULT",
-          `The provider returned more than one result for ${segment.id}.`,
-        );
+        return failure(segment, "DUPLICATE_RESULT");
       }
 
-      return (
-        byId.get(segment.id) ??
-        failure(
-          segment,
-          "MISSING_RESULT",
-          `The provider returned no result for ${segment.id}.`,
-          true,
-        )
-      );
+      return byId.get(segment.id) ?? failure(segment, "MISSING_RESULT");
     });
   } catch (error) {
-    const message = messageFromUnknown(error);
-    return segments.map((segment) =>
-      failure(
-        segment,
-        "TRANSLATION_FAILED",
-        `The provider request failed: ${message}`,
-        true,
-      ),
-    );
+    const safeError = sanitizeError(error, "TRANSLATION_FAILED");
+    return segments.map((segment) => failureWithError(segment, safeError));
   }
 }
 
@@ -180,12 +167,6 @@ export async function translateInBatches(
 
   return request.segments.map(
     (segment) =>
-      resultsById.get(segment.id) ??
-      failure(
-        segment,
-        "MISSING_RESULT",
-        `No translation result was produced for ${segment.id}.`,
-        true,
-      ),
+      resultsById.get(segment.id) ?? failure(segment, "MISSING_RESULT"),
   );
 }

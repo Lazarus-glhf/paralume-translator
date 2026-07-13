@@ -7,6 +7,7 @@ import {
 } from "../src/messaging/validation";
 import { MockTranslationProvider } from "../src/translation/mock";
 import type { TranslationRequest } from "../src/shared/types";
+import { createError } from "../src/shared/errors";
 
 const request: TranslationRequest = {
   sourceLanguage: "auto",
@@ -71,11 +72,7 @@ describe("runtime protocol validation", () => {
           {
             id: "segment-b",
             status: "failure",
-            error: {
-              code: "TRANSLATION_FAILED",
-              message: "Mock failure for segment-b.",
-              retryable: false,
-            },
+            error: createError("TRANSLATION_FAILED"),
           },
         ],
       }).ok,
@@ -127,11 +124,7 @@ describe("MockTranslationProvider", () => {
       {
         id: "segment-b",
         status: "failure",
-        error: {
-          code: "TRANSLATION_FAILED",
-          message: "Mock failure for segment-b.",
-          retryable: false,
-        },
+        error: createError("TRANSLATION_FAILED"),
       },
     ]);
   });

@@ -6,3 +6,5 @@ export interface TranslationProvider {
     request: TranslationRequest,
   ) => Promise<readonly TranslationResult[]>;
 }
+
+export type TranslationProviderResolver = () => Promise<TranslationProvider>;
