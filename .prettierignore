@@ -1,0 +1,7 @@
+.hermes/
+.output/
+.wxt/
+coverage/
+node_modules/
+pnpm-lock.yaml
+AGENTS.md

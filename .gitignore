@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# WXT generated files and packaged extensions
+.output/
+.wxt/
+
+# Test output
+coverage/
+
+# Logs
+*.log
+pnpm-debug.log*
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.swp
