@@ -18,6 +18,7 @@ Paralume is a local-first bilingual webpage translator for Chrome and Edge. The 
 - Use stable segment IDs and map results by ID, never by unchecked array position.
 - Make translate/toggle/clear operations idempotent.
 - Keep Manifest permissions minimal and justified.
+- Milestone 1 uses `activeTab` + `scripting` for explicit, on-demand page injection. Do not add a static all-sites content script or broad host permissions.
 - Do not log secrets or full sensitive page content.
 
 ## Workflow

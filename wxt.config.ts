@@ -8,7 +8,6 @@ export default defineConfig({
     description:
       "Read webpages with the original text and translation together.",
     version: "0.0.0",
-    permissions: [],
-    host_permissions: [],
+    permissions: ["activeTab", "scripting"],
   },
 });

@@ -1,3 +1,11 @@
+import { createBackgroundMessageHandler } from "../src/messaging/background-handler";
+import { registerBackgroundMessageListener } from "../src/messaging/background-listener";
+import { MockTranslationProvider } from "../src/translation/mock";
+
 export default defineBackground(() => {
-  // Milestone 0 intentionally registers no runtime handlers.
+  const handleMessage = createBackgroundMessageHandler(
+    new MockTranslationProvider(),
+  );
+
+  registerBackgroundMessageListener(browser.runtime.onMessage, handleMessage);
 });

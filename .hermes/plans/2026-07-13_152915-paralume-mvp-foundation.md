@@ -17,7 +17,9 @@
 - Browsers: Chrome and Edge via Manifest V3.
 - First milestone uses only a `MockTranslationProvider`; no real API and no API key UI yet.
 - A user-triggered action translates the current page.
-- Original DOM remains unchanged; translation is inserted as a sibling block.
+- Page access uses `activeTab` + `scripting`: inject the content entrypoint only after an explicit popup action. Do not register a static all-sites content script in Milestone 1.
+- Original DOM nodes remain unchanged. Normal blocks receive an immediate sibling translation `div`; structural `li`, `td`, and `th` containers receive an internal translation `div` appended after their original content.
+- Required presentation is strictly interleaved at block level while preserving list numbering and table column structure; never create sibling `li`, `td`, or `th` elements.
 - Popup actions: translate, hide/show translations, clear translations.
 - Basic Options page exists as a future provider/settings boundary, but avoids speculative settings.
 - React is limited to Popup and Options.
@@ -97,7 +99,7 @@ Start with `p`, `li`, `blockquote`, `h1`–`h6`, `td`, `th`, and `figcaption`. U
 - `src/content/cleanup.ts`
 - `src/content/constants.ts`
 
-Insert a sibling translation element using text-only output. Track source/translation ownership with `data-paralume-*` attributes. Toggle visibility without retranslating. Cleanup removes only Paralume-owned nodes and markers.
+Insert a sibling translation `div` for normal blocks and an internal appended translation `div` for `li`, `td`, and `th`, using text-only output. Track authoritative ownership in runtime-private state; `data-paralume-*` attributes are non-authoritative diagnostics. Toggle visibility without retranslating. Cleanup removes only nodes and markers recorded by the installed runtime.
 
 **Tests**
 - Original source HTML and links remain unchanged.
@@ -125,7 +127,7 @@ Batch by bounded segment count/character count, limit concurrency, handle errors
 - `entrypoints/content.ts`
 - `src/content/controller.ts`
 
-Handle translate, toggle, and clear commands. Extract only when translation is requested. Repeated translate commands must reuse rendered/mock results or skip already processed segments, not create duplicates.
+Handle translate, toggle, and clear commands. Extract only when translation is requested. Repeated translate commands must reuse rendered/mock results or skip already processed segments, not create duplicates. Package the content entrypoint for programmatic injection with `browser.scripting.executeScript`; do not add static `matches` that run on every site.
 
 **Tests**
 - Full controller loop in happy-dom.
@@ -145,7 +147,7 @@ Handle translate, toggle, and clear commands. Extract only when translation is r
 - `entrypoints/options/App.tsx`
 - `entrypoints/options/style.css`
 
-Popup sends commands to the active tab and displays concise progress/errors. Options explains that Mock is active and reserves a typed settings boundary; it must not expose fake API settings.
+Popup requests the active tab, injects the content entrypoint on demand when needed, sends commands, and displays concise progress/errors. It must handle restricted/browser-internal pages honestly. Options explains that Mock is active and reserves a typed settings boundary; it must not expose fake API settings.
 
 **Tests**
 - Popup action/message tests where valuable.
@@ -164,6 +166,9 @@ Load the built unpacked extension into Chromium, open a local static article, tr
 - code block is not translated;
 - hide/show does not duplicate output;
 - clear removes translations.
+- generated manifest has only `activeTab` and `scripting`, no broad `host_permissions`, and no static `content_scripts` entry.
+
+After deterministic fixture verification, manually exercise the unpacked extension against `https://developers.openai.com/api/docs/guides/prompt-guidance-gpt-5p6` and record observed extraction/rendering issues. The live page is a compatibility check, not the sole automated test oracle because its content can change.
 
 If popup automation is brittle, directly exercise the same runtime command boundary and separately smoke-open the popup page.
 

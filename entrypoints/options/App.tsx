@@ -3,14 +3,15 @@ export function App() {
     <main className="options" aria-labelledby="options-title">
       <p className="eyebrow">Paralume</p>
       <h1 id="options-title">Options</h1>
-      <section aria-labelledby="foundation-title">
-        <h2 id="foundation-title">Foundation build</h2>
+      <section aria-labelledby="provider-title">
+        <h2 id="provider-title">Translation provider</h2>
         <p>
-          Provider and reading preferences will live here after their behavior
-          and privacy boundaries are defined.
+          Milestone 1 uses a deterministic local Mock provider to verify page
+          extraction, messaging, batching, and rendering. It does not contact a
+          translation service and does not produce real translations.
         </p>
         <p className="notice" role="status">
-          There are no configurable settings in Milestone 0.
+          Mock provider is active. There are no configurable API settings.
         </p>
       </section>
     </main>

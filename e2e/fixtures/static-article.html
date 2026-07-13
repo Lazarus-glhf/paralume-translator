@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Paralume deterministic article fixture</title>
+    <style>
+      body {
+        max-width: 52rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        color: #1d2a25;
+        font-family: system-ui, sans-serif;
+        line-height: 1.55;
+      }
+
+      table {
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 0.4rem 0.7rem;
+        border: 1px solid #9aaca4;
+        text-align: left;
+      }
+
+      .visually-removed {
+        display: none;
+      }
+    </style>
+  </head>
+  <body data-page-owned="fixture-root">
+    <nav aria-label="Fixture navigation">
+      <p id="nav-copy" data-expect-excluded>
+        Navigation copy must never receive a translation.
+      </p>
+    </nav>
+
+    <main>
+      <article aria-labelledby="article-title">
+        <h1 id="article-title" data-expect-translation>
+          A deterministic bilingual reading fixture
+        </h1>
+
+        <p
+          id="linked-paragraph"
+          class="source-paragraph"
+          data-page-marker="preserve-me"
+          data-expect-translation
+        >
+          This paragraph keeps its
+          <a id="inline-link" href="/linked-target.html#details"
+            >inline documentation link</a
+          >
+          and its original browser-owned event listener.
+        </p>
+
+        <h2 id="structure-heading" data-expect-translation>
+          Structured article content
+        </h2>
+
+        <p id="html-looking" data-expect-translation>
+          Literal HTML-looking text stays harmless: &lt;img
+          id="mock-output-node" src="x"
+          onerror="document.body.dataset.compromised='true'"&gt;
+        </p>
+
+        <ul aria-label="Fixture list">
+          <li id="list-first" data-expect-translation>
+            <p>The first list item contains a nested readable paragraph.</p>
+          </li>
+          <li id="list-second" data-expect-translation>
+            The second list item proves internal placement remains stable.
+          </li>
+        </ul>
+
+        <blockquote id="article-quote" data-expect-translation>
+          Translation should follow this quoted passage immediately.
+        </blockquote>
+
+        <figure>
+          <div role="img" aria-label="Abstract fixture illustration">◇</div>
+          <figcaption id="figure-caption" data-expect-translation>
+            A descriptive figure caption belongs in the readable article.
+          </figcaption>
+        </figure>
+
+        <table aria-label="Deterministic content table">
+          <thead>
+            <tr>
+              <th id="table-topic" scope="col" data-expect-translation>
+                <p>Article topic</p>
+              </th>
+              <th id="table-detail" scope="col" data-expect-translation>
+                Verification detail
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td id="table-row-one-topic" data-expect-translation>
+                Inline content
+              </td>
+              <td id="table-row-one-detail" data-expect-translation>
+                <p>Links and listeners stay attached to the source DOM.</p>
+              </td>
+            </tr>
+            <tr>
+              <td id="table-row-two-topic" data-expect-translation>
+                Safe rendering
+              </td>
+              <td id="table-row-two-detail" data-expect-translation>
+                Provider output is inserted only as inert text content.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <section aria-label="Excluded regions">
+          <code id="inline-code" data-expect-excluded
+            >const untranslated = "inline code";</code
+          >
+          <pre
+            id="preformatted-code"
+            data-expect-excluded
+          ><code>function keepSourceCode() {
+  return "unchanged";
+}</code></pre>
+
+          <form id="fixture-form">
+            <p id="form-copy" data-expect-excluded>
+              Form instructions must remain untranslated.
+            </p>
+            <label for="fixture-input">Fixture input value</label>
+            <input id="fixture-input" value="original input" />
+          </form>
+
+          <p id="hidden-copy" hidden data-expect-excluded>
+            Hidden content must remain untranslated.
+          </p>
+          <div aria-hidden="true">
+            <p id="aria-hidden-copy" data-expect-excluded>
+              Aria-hidden content must remain untranslated.
+            </p>
+          </div>
+          <p
+            id="display-none-copy"
+            class="visually-removed"
+            data-expect-excluded
+          >
+            Display-none content must remain untranslated.
+          </p>
+          <div contenteditable="true">
+            <p id="editable-copy" data-expect-excluded>
+              Editable content must remain under page ownership.
+            </p>
+          </div>
+        </section>
+      </article>
+    </main>
+
+    <footer>
+      <p id="footer-copy" data-expect-excluded>
+        Footer copy must never receive a translation.
+      </p>
+    </footer>
+
+    <script>
+      const fixtureLink = document.querySelector("#inline-link");
+      window.fixtureOriginalLink = fixtureLink;
+      window.fixtureLinkClicks = 0;
+      fixtureLink.addEventListener("click", (event) => {
+        event.preventDefault();
+        window.fixtureLinkClicks += 1;
+      });
+    </script>
+  </body>
+</html>
