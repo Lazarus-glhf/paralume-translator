@@ -1,7 +1,7 @@
 import { installContentRuntime } from "../src/content/runtime";
 
 export default defineUnlistedScript(() => {
-  return installContentRuntime({
+  installContentRuntime({
     document,
     globalObject: globalThis,
     runtime: browser.runtime,

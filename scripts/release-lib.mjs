@@ -11,9 +11,14 @@ export const REQUIRED_ARCHIVE_FILES = [
   "popup.html",
   "options.html",
   "paralume.js",
+  "content-scripts/content.js",
+  "icon/16.png",
+  "icon/32.png",
+  "icon/48.png",
+  "icon/128.png",
 ];
 export const REQUIRED_PERMISSIONS = ["activeTab", "scripting", "storage"];
-export const REQUIRED_OPTIONAL_HOST_PERMISSIONS = ["https://*/*"];
+export const REQUIRED_HOST_PERMISSIONS = ["http://*/*", "https://*/*"];
 
 export function parseReleaseVersion(value, label = "version") {
   if (typeof value !== "string" || !NUMERIC_SEMVER_PATTERN.test(value)) {
@@ -163,15 +168,43 @@ export function validateReleaseManifest(manifest, version, browser) {
     `${browser} manifest permissions`,
   );
   assertExactStringSet(
-    manifest.optional_host_permissions,
-    REQUIRED_OPTIONAL_HOST_PERMISSIONS,
-    `${browser} manifest optional_host_permissions`,
+    manifest.host_permissions,
+    REQUIRED_HOST_PERMISSIONS,
+    `${browser} manifest host_permissions`,
   );
-
-  for (const forbiddenKey of ["host_permissions", "content_scripts"]) {
-    if (Object.hasOwn(manifest, forbiddenKey)) {
-      throw new Error(`${browser} manifest must not declare ${forbiddenKey}.`);
-    }
+  if (!Array.isArray(manifest.content_scripts)) {
+    throw new Error(
+      `${browser} manifest must declare automatic content scripts.`,
+    );
+  }
+  const [contentScript] = manifest.content_scripts;
+  if (
+    manifest.content_scripts.length !== 1 ||
+    contentScript === null ||
+    typeof contentScript !== "object" ||
+    Array.isArray(contentScript)
+  ) {
+    throw new Error(
+      `${browser} manifest must declare exactly one content script.`,
+    );
+  }
+  assertExactStringSet(
+    contentScript.matches,
+    REQUIRED_HOST_PERMISSIONS,
+    `${browser} content script matches`,
+  );
+  assertExactStringSet(
+    contentScript.js,
+    ["content-scripts/content.js"],
+    `${browser} content script files`,
+  );
+  if (contentScript.run_at !== "document_idle") {
+    throw new Error(`${browser} content script must run at document_idle.`);
+  }
+  if (Object.hasOwn(manifest, "optional_host_permissions")) {
+    throw new Error(
+      `${browser} manifest must not declare optional_host_permissions.`,
+    );
   }
 }
 

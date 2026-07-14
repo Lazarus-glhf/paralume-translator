@@ -211,9 +211,9 @@ export function parseContentCommand(
     !hasOnlyKeys(value, ["protocolVersion", "target", "command"]) ||
     value["protocolVersion"] !== PROTOCOL_VERSION ||
     value["target"] !== "content" ||
-    !(["translate", "retry-failed", "toggle", "clear"] as const).includes(
-      value["command"] as ContentCommand,
-    )
+    !(
+      ["status", "translate", "retry-failed", "toggle", "clear"] as const
+    ).includes(value["command"] as ContentCommand)
   ) {
     return invalid();
   }

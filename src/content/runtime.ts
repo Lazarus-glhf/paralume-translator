@@ -18,6 +18,7 @@ import {
   type ContentController,
   type TranslationProgress,
 } from "./controller";
+import { extractSegments } from "./extractor";
 import { installFloatingMenu } from "./floating-menu";
 import { getContentState } from "./renderer";
 import { createContentRuntimeState, type ContentRuntimeState } from "./state";
@@ -36,6 +37,8 @@ export interface ContentRuntimeDependencies {
   globalObject: Record<string, unknown>;
   runtime: ContentRuntime;
   getBrowserUiLanguage?: () => string | undefined;
+  siteLabel?: string;
+  disableSite?: () => Promise<void>;
 }
 
 interface InstalledContentRuntime {
@@ -70,6 +73,16 @@ export function installContentRuntime(
   let updateProgress: (progress: TranslationProgress) => void = () => undefined;
   let updateFailureCount: (count: number) => void = () => undefined;
   let updateLocale: (locale: "en" | "zh-CN") => void = () => undefined;
+  const getPageProgress = (
+    phase: TranslationProgress["phase"],
+  ): TranslationProgress => {
+    const contentState = getContentState(dependencies.document, state);
+    const completed = contentState.translationCount - contentState.failureCount;
+    const remaining =
+      contentState.failureCount +
+      extractSegments(dependencies.document, state).length;
+    return { phase, completed, total: completed + remaining };
+  };
   const controller = createContentController({
     document: dependencies.document,
     state,
@@ -114,7 +127,7 @@ export function installContentRuntime(
       return parsed.value.contentSettings;
     },
     onProgress(progress) {
-      updateProgress(progress);
+      updateProgress(getPageProgress(progress.phase));
       updateFailureCount(
         getContentState(dependencies.document, state).failureCount,
       );
@@ -128,6 +141,14 @@ export function installContentRuntime(
     dependencies.document,
     (command) => controller.handleMessage(createContentCommand(command)),
     "en",
+    {
+      ...(dependencies.siteLabel === undefined
+        ? {}
+        : { siteLabel: dependencies.siteLabel }),
+      ...(dependencies.disableSite === undefined
+        ? {}
+        : { disableSite: dependencies.disableSite }),
+    },
   );
   state.ownedNodes.add(menu.host);
   updateProgress = (progress) => {
@@ -139,6 +160,22 @@ export function installContentRuntime(
   updateLocale = (locale) => {
     menu.setLocale(locale);
   };
+  menu.setProgress(getPageProgress("idle"));
+  void dependencies.runtime
+    .sendMessage(createGetContentSettingsMessage())
+    .then((rawSettings) => {
+      const parsed = parseContentSettingsResponse(rawSettings);
+      if (!parsed.ok || !parsed.value.ok) return;
+      const requested = parsed.value.contentSettings.uiLanguage;
+      const browserLanguage = dependencies.getBrowserUiLanguage?.();
+      updateLocale(
+        requested === "zh-CN" ||
+          (requested === "system" && browserLanguage?.startsWith("zh"))
+          ? "zh-CN"
+          : "en",
+      );
+    })
+    .catch(() => undefined);
 
   dependencies.runtime.onMessage.addListener((message) => {
     const parsed = parseTranslationResultMessage(message);

@@ -891,6 +891,10 @@ export function createContentController(
       }
 
       switch (parsed.value.command) {
+        case "status":
+          return Promise.resolve(
+            success(dependencies, createMessage("popup.ready")),
+          );
         case "translate":
           return translate();
         case "retry-failed":

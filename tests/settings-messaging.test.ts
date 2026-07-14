@@ -335,64 +335,11 @@ describe("Options settings client", () => {
     });
   });
 
-  it("removes a stale exact origin after saving a changed endpoint", async () => {
+  it("keeps the fixed install-time web permissions when an endpoint changes", async () => {
     const permissions: ProviderPermissionsApi = {
       contains: vi.fn(() => Promise.resolve(true)),
       request: vi.fn(() => Promise.resolve(true)),
       remove: vi.fn(() => Promise.resolve(true)),
-    };
-    const oldSettings = {
-      version: 2 as const,
-      provider: "openai" as const,
-      openai: { ...draft.openai, apiKeyConfigured: true },
-      microsoft: { ...draft.microsoft, apiKeyConfigured: false },
-      retry: draft.retry,
-      appearance: draft.appearance,
-      uiLanguage: draft.uiLanguage,
-    };
-    const newDraft = {
-      ...draft,
-      openai: { ...draft.openai, baseUrl: "https://new.example.com/v1" },
-    };
-    const sendMessage = vi
-      .fn()
-      .mockResolvedValueOnce({
-        protocolVersion: 1,
-        ok: true,
-        settings: oldSettings,
-        message: { id: "settings.loaded" },
-      })
-      .mockResolvedValueOnce({
-        protocolVersion: 1,
-        ok: true,
-        settings: {
-          ...oldSettings,
-          openai: { ...newDraft.openai, apiKeyConfigured: true },
-        },
-        message: { id: "settings.saved" },
-      });
-    const client = createOptionsClient({ sendMessage }, permissions);
-
-    await client.save(newDraft, {});
-
-    expect(permissions.remove).toHaveBeenCalledWith({
-      origins: ["https://api.example.com/*"],
-    });
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ command: "get" }),
-    );
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ command: "save" }),
-    );
-  });
-
-  it("keeps saved settings and reports a fixed warning when old-origin removal fails", async () => {
-    const permissions: ProviderPermissionsApi = {
-      contains: vi.fn(() => Promise.resolve(true)),
-      request: vi.fn(() => Promise.resolve(true)),
-      remove: vi.fn(() => Promise.resolve(false)),
     };
     const oldSettings = {
       version: 2 as const,
@@ -429,8 +376,17 @@ describe("Options settings client", () => {
 
     await expect(client.save(newDraft, {})).resolves.toEqual({
       settings: savedSettings,
-      message: { id: "settings.permissionRemovalFailed" },
+      message: { id: "settings.saved" },
     });
+    expect(permissions.remove).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ command: "get" }),
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ command: "save" }),
+    );
   });
 
   it("initiates Test connection permission directly from the loaded click path", async () => {

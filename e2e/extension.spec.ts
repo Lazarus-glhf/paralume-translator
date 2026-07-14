@@ -207,9 +207,15 @@ test("generated Chrome manifest matches package version and keeps provider origi
     "scripting",
     "storage",
   ]);
-  expect(manifest["optional_host_permissions"]).toEqual(["https://*/*"]);
-  expect(Object.hasOwn(manifest, "host_permissions")).toBe(false);
-  expect(Object.hasOwn(manifest, "content_scripts")).toBe(false);
+  expect(manifest["host_permissions"]).toEqual(["http://*/*", "https://*/*"]);
+  expect(manifest["optional_host_permissions"]).toBeUndefined();
+  expect(manifest["content_scripts"]).toEqual([
+    {
+      matches: ["http://*/*", "https://*/*"],
+      run_at: "document_idle",
+      js: ["content-scripts/content.js"],
+    },
+  ]);
 });
 
 test.describe("unpacked Chromium extension", () => {
@@ -260,7 +266,7 @@ test.describe("unpacked Chromium extension", () => {
     await rm(userDataDir, { force: true, recursive: true });
   });
 
-  test("action popup drives the foreground HTTP article through activeTab and scripting", async () => {
+  test("automatic page runtime and action popup drive the foreground HTTP article", async () => {
     if (context === undefined || browserCdp === undefined) {
       throw new Error("The extension browser context was not initialized.");
     }
@@ -312,6 +318,7 @@ test.describe("unpacked Chromium extension", () => {
       .locator("[data-expect-translation]")
       .count();
     expect(expectedSourceCount).toBeGreaterThan(0);
+    await expect(articlePage.locator(floatingMenuSelector)).toHaveCount(1);
 
     const actionPopup = await triggerActionPopup(
       context,
@@ -321,12 +328,13 @@ test.describe("unpacked Chromium extension", () => {
     );
     try {
       expect(await actionPopup.activeTabUrl()).toBe(fixtureUrl);
-
-      await expect
-        .poll(() => actionPopup.statusText())
-        .toBe(
-          `Translated ${String(expectedSourceCount)} readable blocks; 0 unavailable.`,
-        );
+      await actionPopup.waitForStatus(
+        "Ready. Translation runs only when you request it.",
+      );
+      await actionPopup.click("translate");
+      await actionPopup.waitForStatus(
+        `Translated ${String(expectedSourceCount)} readable blocks; 0 unavailable.`,
+      );
       await expect(articlePage.locator(translationSelector)).toHaveCount(
         expectedSourceCount,
       );
@@ -774,7 +782,7 @@ test.describe("unpacked Chromium extension", () => {
     await restrictedPage.close();
   });
 
-  test("Options securely saves credentials, rotates exact origins after reopen, reloads after worker restart, and blocks revoked access", async () => {
+  test("Options securely saves credentials, preserves fixed web permissions, reloads after worker restart, and clears keys", async () => {
     if (context === undefined || browserCdp === undefined) {
       throw new Error("The extension browser context was not initialized.");
     }
@@ -829,8 +837,10 @@ test.describe("unpacked Chromium extension", () => {
     await expect(keyInput).toHaveAttribute("type", "password");
     await expect(keyInput).toHaveValue("");
     await expect(keyInput).toHaveAttribute("placeholder", /configured/u);
-    expect(await getGrantedOrigins(optionsPage)).toContain(firstOrigin);
-    expect(await getGrantedOrigins(optionsPage)).not.toContain("https://*/*");
+    expect(await getGrantedOrigins(optionsPage)).toEqual([
+      "http://*/*",
+      "https://*/*",
+    ]);
 
     const publicResponse = await optionsPage.evaluate(async () => {
       const extensionApi = (
@@ -895,12 +905,10 @@ test.describe("unpacked Chromium extension", () => {
       contains: [[secondOrigin]],
       request: [[secondOrigin]],
     });
-    await expect
-      .poll(() => getGrantedOrigins(optionsPage))
-      .toContain(secondOrigin);
-    await expect
-      .poll(() => getGrantedOrigins(optionsPage))
-      .not.toContain(firstOrigin);
+    expect(await getGrantedOrigins(optionsPage)).toEqual([
+      "http://*/*",
+      "https://*/*",
+    ]);
 
     const runningWorker = context
       .serviceWorkers()
@@ -960,22 +968,7 @@ test.describe("unpacked Chromium extension", () => {
       optionsPage.locator('input[name="openaiApiKey"]'),
     ).toHaveAttribute("placeholder", "Enter API key");
 
-    const revoked = await optionsPage.evaluate(async (origin) => {
-      const extensionApi = (
-        globalThis as unknown as {
-          chrome: {
-            permissions: {
-              remove(permission: { origins: string[] }): Promise<boolean>;
-            };
-          };
-        }
-      ).chrome;
-      return extensionApi.permissions.remove({ origins: [origin] });
-    }, secondOrigin);
-    expect(revoked).toBe(true);
-    expect(await getGrantedOrigins(optionsPage)).not.toContain(secondOrigin);
-
-    const blocked = await optionsPage.evaluate(async () => {
+    const publicAfterClear = await optionsPage.evaluate(async () => {
       const extensionApi = (
         globalThis as unknown as {
           chrome: {
@@ -985,34 +978,15 @@ test.describe("unpacked Chromium extension", () => {
       ).chrome;
       return extensionApi.runtime.sendMessage({
         protocolVersion: 1,
-        target: "background",
-        command: "translate",
-        operationId: globalThis.crypto.randomUUID(),
-        request: {
-          sourceLanguage: "auto",
-          targetLanguage: "zh-CN",
-          segments: [
-            {
-              id: "revoked-permission-segment",
-              text: "LEAK_PAGE_TEXT_revoked_permission",
-            },
-          ],
-        },
+        target: "settings",
+        command: "get",
       });
     });
-    expect(blocked).toEqual({
-      protocolVersion: 1,
-      ok: false,
-      error: {
-        code: "PERMISSION_MISSING",
-        message:
-          "Access to the configured provider origin is not granted. Save the provider settings again.",
-        retryable: false,
-      },
+    expect(publicAfterClear).toMatchObject({
+      ok: true,
+      settings: { openai: { apiKeyConfigured: false } },
     });
-    expect(JSON.stringify(blocked)).not.toMatch(
-      /provider-b|credential-marker|LEAK_PAGE_TEXT/u,
-    );
+    expect(JSON.stringify(publicAfterClear)).not.toContain(credentialMarker);
 
     await optionsPage.evaluate(async () => {
       const extensionApi = (
@@ -1149,8 +1123,8 @@ test.describe("unpacked Chromium extension", () => {
       extensionId,
       retryPage,
     );
-    await actionPopup.waitForStatus("正在翻译…");
-    await actionPopup.close();
+    await actionPopup.waitForStatus("已就绪。仅在你主动请求时翻译。");
+    await actionPopup.click("translate");
     await expect
       .poll(() =>
         retryPage.evaluate(() => {
@@ -1170,6 +1144,7 @@ test.describe("unpacked Chromium extension", () => {
     await expect(automaticTranslation).toHaveText(
       "【Mock zh-CN attempt 3】Automatic retry fixture text.",
     );
+    await actionPopup.close();
 
     const resumedPopup = await triggerActionPopup(
       context,
@@ -1183,14 +1158,30 @@ test.describe("unpacked Chromium extension", () => {
         manual.id = "manual-source";
         manual.style.marginTop = "21px";
         manual.textContent =
-          "[[PARALUME_MOCK_TRANSIENT:3:SERVER_UNAVAILABLE]] Manual retry fixture text.";
+          "[[PARALUME_MOCK_RESULT_FAILURE:3:SERVER_UNAVAILABLE]] Manual retry fixture text.";
         document.querySelector("main")?.append(manual);
       });
       const manualSourceStyle = await retryPage
         .locator("#manual-source")
         .getAttribute("style");
 
-      await resumedPopup.click("translate");
+      expect(await resumedPopup.activeTabUrl()).toBe(retryFixtureUrl);
+      const retryTabId = await resumedPopup.activeTabId();
+      if (retryTabId === undefined) {
+        throw new Error("The retry fixture tab ID was not available.");
+      }
+      const manualResponse = await runRuntimeCommand(
+        popupPage,
+        retryTabId,
+        "translate",
+      );
+      expect(manualResponse).toMatchObject({
+        ok: true,
+        message: {
+          id: "content.translationSummary",
+          values: { succeeded: 0, failed: 1 },
+        },
+      });
       const manualFailure = retryPage.locator(
         `#manual-source + ${translationSelector}`,
       );

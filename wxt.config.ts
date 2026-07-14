@@ -8,6 +8,20 @@ export default defineConfig({
     description:
       "Read webpages with the original text and translation together.",
     permissions: ["activeTab", "scripting", "storage"],
-    optional_host_permissions: ["https://*/*"],
+    host_permissions: ["http://*/*", "https://*/*"],
+    icons: {
+      16: "icon/16.png",
+      32: "icon/32.png",
+      48: "icon/48.png",
+      128: "icon/128.png",
+    },
+    action: {
+      default_icon: {
+        16: "icon/16.png",
+        32: "icon/32.png",
+        48: "icon/48.png",
+        128: "icon/128.png",
+      },
+    },
   },
 });

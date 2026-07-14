@@ -9,7 +9,6 @@ import type { MessageDescriptor } from "../localization";
 import {
   getProviderOriginPattern,
   requestProviderOriginPermission,
-  removeStaleProviderOriginPermission,
   type ProviderPermissionsApi,
 } from "../settings/permissions";
 import type {
@@ -103,9 +102,7 @@ export function createOptionsClient(
       const wasAlreadyGranted = await permissionExisted;
       let saved = false;
       try {
-        const previous = publicAsStored(
-          (await send(createGetSettingsMessage())).settings,
-        );
+        await send(createGetSettingsMessage());
         const normalizedDraft: ProviderSettingsDraft = {
           provider: validated.provider,
           openai: {
@@ -126,17 +123,6 @@ export function createOptionsClient(
           createSaveSettingsMessage(normalizedDraft, replacements),
         );
         saved = true;
-        const removal = await removeStaleProviderOriginPermission(
-          previous,
-          publicAsStored(result.settings),
-          permissions,
-        );
-        if (removal === "failed") {
-          return {
-            settings: result.settings,
-            message: { id: "settings.permissionRemovalFailed" },
-          };
-        }
         return result;
       } finally {
         if (

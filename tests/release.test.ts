@@ -16,22 +16,29 @@ const releaseCommit = "0123456789abcdef0123456789abcdef01234567";
 
 const validManifest = {
   manifest_version: 3,
-  version: "0.0.3",
+  version: "0.1.0",
   permissions: ["activeTab", "scripting", "storage"],
-  optional_host_permissions: ["https://*/*"],
+  host_permissions: ["http://*/*", "https://*/*"],
+  content_scripts: [
+    {
+      matches: ["http://*/*", "https://*/*"],
+      run_at: "document_idle",
+      js: ["content-scripts/content.js"],
+    },
+  ],
 };
 
 describe("release version metadata", () => {
-  it("uses 0.0.3 for the next Alpha package version", () => {
+  it("uses 0.1.0 for the first public release package version", () => {
     const packageJson = JSON.parse(
       readFileSync(resolve("package.json"), "utf8"),
     ) as { version?: unknown };
 
-    expect(packageJson.version).toBe("0.0.3");
+    expect(packageJson.version).toBe("0.1.0");
   });
 
-  it("accepts the next Alpha version and Chromium-compatible numeric SemVer", () => {
-    expect(parseReleaseVersion("0.0.3")).toBe("0.0.3");
+  it("accepts the first public release version and Chromium-compatible numeric SemVer", () => {
+    expect(parseReleaseVersion("0.1.0")).toBe("0.1.0");
     expect(parseReleaseVersion("65535.2.3")).toBe("65535.2.3");
   });
 
@@ -49,45 +56,45 @@ describe("release version metadata", () => {
   it("requires a tag push to match package.json exactly", () => {
     expect(
       resolveReleaseMetadata({
-        packageVersion: "0.0.3",
+        packageVersion: "0.1.0",
         eventName: "push",
         refType: "tag",
-        refName: "v0.0.3",
+        refName: "v0.1.0",
         releaseSha: releaseCommit,
         trustedMainSha: releaseCommit,
       }),
-    ).toEqual({ version: "0.0.3", tag: "v0.0.3" });
+    ).toEqual({ version: "0.1.0", tag: "v0.1.0" });
 
     expect(() =>
       resolveReleaseMetadata({
-        packageVersion: "0.0.3",
+        packageVersion: "0.1.0",
         eventName: "push",
         refType: "tag",
         refName: "v0.1.1",
       }),
-    ).toThrow("exact tag v0.0.3");
+    ).toThrow("exact tag v0.1.0");
   });
 
   it("accepts an exact manual version only from main", () => {
     expect(
       resolveReleaseMetadata({
-        packageVersion: "0.0.3",
+        packageVersion: "0.1.0",
         eventName: "workflow_dispatch",
         refType: "branch",
         refName: "main",
-        inputVersion: "0.0.3",
+        inputVersion: "0.1.0",
         releaseSha: releaseCommit,
         trustedMainSha: releaseCommit,
       }),
-    ).toEqual({ version: "0.0.3", tag: "v0.0.3" });
+    ).toEqual({ version: "0.1.0", tag: "v0.1.0" });
 
     expect(() =>
       resolveReleaseMetadata({
-        packageVersion: "0.0.3",
+        packageVersion: "0.1.0",
         eventName: "workflow_dispatch",
         refType: "branch",
         refName: "release-test",
-        inputVersion: "0.0.3",
+        inputVersion: "0.1.0",
       }),
     ).toThrow("main branch");
   });
@@ -112,7 +119,7 @@ describe("release version metadata", () => {
 describe("release manifest validation", () => {
   it("accepts the minimal expected Manifest V3 permissions", () => {
     expect(() => {
-      validateReleaseManifest(validManifest, "0.0.3", "chrome");
+      validateReleaseManifest(validManifest, "0.1.0", "chrome");
     }).not.toThrow();
   });
 
@@ -120,21 +127,44 @@ describe("release manifest validation", () => {
     expect(() => {
       validateReleaseManifest(
         { ...validManifest, version: "0.1.1" },
-        "0.0.3",
+        "0.1.0",
         "chrome",
       );
     }).toThrow("does not match");
     expect(() => {
       validateReleaseManifest(
-        { ...validManifest, host_permissions: ["https://*/*"] },
-        "0.0.3",
+        { ...validManifest, optional_host_permissions: ["https://*/*"] },
+        "0.1.0",
         "chrome",
       );
-    }).toThrow("must not declare host_permissions");
+    }).toThrow("must not declare optional_host_permissions");
+    expect(() => {
+      validateReleaseManifest(
+        { ...validManifest, content_scripts: [] },
+        "0.1.0",
+        "chrome",
+      );
+    }).toThrow("exactly one content script");
+    expect(() => {
+      validateReleaseManifest(
+        {
+          ...validManifest,
+          content_scripts: [
+            {
+              matches: ["<all_urls>"],
+              run_at: "document_start",
+              js: ["unexpected.js"],
+            },
+          ],
+        },
+        "0.1.0",
+        "chrome",
+      );
+    }).toThrow("content script matches");
     expect(() => {
       validateReleaseManifest(
         { ...validManifest, permissions: ["activeTab", "storage"] },
-        "0.0.3",
+        "0.1.0",
         "chrome",
       );
     }).toThrow("permissions must be exactly");
@@ -148,6 +178,11 @@ describe("release archive validation", () => {
     "popup.html",
     "options.html",
     "paralume.js",
+    "content-scripts/content.js",
+    "icon/16.png",
+    "icon/32.png",
+    "icon/48.png",
+    "icon/128.png",
     "assets/popup.css",
   ];
 
@@ -155,12 +190,12 @@ describe("release archive validation", () => {
     expect(() => {
       validateArchiveEntries(expectedEntries, "chrome");
     }).not.toThrow();
-    expect(getReleaseAssetNames("paralume-translator", "0.0.3")).toEqual({
+    expect(getReleaseAssetNames("paralume-translator", "0.1.0")).toEqual({
       archives: {
-        chrome: "paralume-translator-0.0.3-chrome.zip",
-        edge: "paralume-translator-0.0.3-edge.zip",
+        chrome: "paralume-translator-0.1.0-chrome.zip",
+        edge: "paralume-translator-0.1.0-edge.zip",
       },
-      checksums: "paralume-translator-0.0.3-SHA256SUMS.txt",
+      checksums: "paralume-translator-0.1.0-SHA256SUMS.txt",
     });
   });
 

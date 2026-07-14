@@ -36,7 +36,7 @@ Do not add PDF/video/OCR support, accounts, cloud sync, payments, Firefox suppor
 ## Milestone 2 provider decisions
 - Add OpenAI-compatible and Microsoft Translator providers; keep Mock available only as an explicitly selected development provider and never automatically fall back to it.
 - OpenAI-compatible supports both Responses (`/responses`) and Chat Completions (`/chat/completions`), selected by the user.
-- The first release accepts arbitrary HTTPS OpenAI-compatible endpoints. The manifest declares the ungranted `optional_host_permissions` pattern `https://*/*` so Chrome can later grant custom origins, but runtime code must request and use only the exact configured origin. Do not add broad granted `host_permissions`.
+- The first public release automatically injects the floating control on ordinary HTTP and HTTPS pages. The manifest grants only `http://*/*` and `https://*/*`; runtime code still validates configured provider URLs and never exposes API keys to content scripts.
 - Store BYOK credentials in `chrome.storage.local`; only background/provider code may read keys. Options must mask and clear keys, and documentation must state that local storage is not an encrypted vault.
 - Microsoft Translator uses API Key + Region + configurable Endpoint, defaulting to `https://api.cognitive.microsofttranslator.com`.
 - OpenAI batch format errors fail the batch clearly. Do not silently split malformed batches into per-segment requests.

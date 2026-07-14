@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Paralume — P + Parallel 图标候选</title>
+    <style>
+      :root {
+        font-family: Inter, system-ui, sans-serif;
+        color: #23212c;
+        background: #f5f4f8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      .board {
+        width: min(1040px, calc(100% - 32px));
+        margin: auto;
+        padding: 48px 0;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: clamp(28px, 5vw, 48px);
+        letter-spacing: -0.04em;
+      }
+      .intro {
+        margin: 0 0 28px;
+        color: #716e7b;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+      .card {
+        padding: 24px;
+        border: 1px solid #e3e0e8;
+        border-radius: 22px;
+        background: #fff;
+        box-shadow: 0 12px 36px #251b4d0d;
+      }
+      .master {
+        display: grid;
+        place-items: center;
+        height: 220px;
+        border-radius: 16px;
+        background: linear-gradient(145deg, #f8f7fb, #efedf5);
+      }
+      .master img {
+        width: 150px;
+        height: 150px;
+      }
+      h2 {
+        margin: 20px 0 6px;
+        font-size: 20px;
+      }
+      .desc {
+        min-height: 66px;
+        margin: 0;
+        color: #716e7b;
+        line-height: 1.55;
+      }
+      .sizes {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid #ece9ef;
+      }
+      .sizes span {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: #77737f;
+        font-size: 12px;
+      }
+      .s16 {
+        width: 16px;
+        height: 16px;
+        image-rendering: auto;
+      }
+      .s32 {
+        width: 32px;
+        height: 32px;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-top: 24px;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: #27262d;
+      }
+      .toolbar img {
+        width: 16px;
+        height: 16px;
+      }
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #77747e;
+      }
+      @media (max-width: 760px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .desc {
+          min-height: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="board">
+      <h1>P 本身就是并行结构</h1>
+      <p class="intro">
+        三个方向都保留可辨认的 P，同时用双轨、重叠或分栏表达 Parallel。
+      </p>
+      <section class="grid">
+        <article class="card">
+          <div class="master">
+            <img src="png/paralume-icon-d-twin-p.png" alt="D 双轨 P" />
+          </div>
+          <h2>D — Twin P</h2>
+          <p class="desc">
+            两个错位重叠的 P 共用结构，直接表达两条内容流并行前进。
+          </p>
+          <div class="sizes">
+            <span
+              ><img
+                class="s16"
+                src="png/paralume-icon-d-twin-p-16.png"
+              />16px</span
+            ><span
+              ><img
+                class="s32"
+                src="png/paralume-icon-d-twin-p.png"
+              />32px</span
+            >
+          </div>
+          <div class="toolbar">
+            <span class="dot"></span
+            ><img src="png/paralume-icon-d-twin-p-16.png" /><span
+              class="dot"
+            ></span>
+          </div>
+        </article>
+        <article class="card">
+          <div class="master">
+            <img
+              src="png/paralume-icon-e-parallel-rails.png"
+              alt="E 并行轨道 P"
+            />
+          </div>
+          <h2>E — Parallel rails</h2>
+          <p class="desc">
+            白色主 P 与紫色副轨并排，强调原文与译文两条并行阅读轨道。
+          </p>
+          <div class="sizes">
+            <span
+              ><img
+                class="s16"
+                src="png/paralume-icon-e-parallel-rails-16.png"
+              />16px</span
+            ><span
+              ><img
+                class="s32"
+                src="png/paralume-icon-e-parallel-rails.png"
+              />32px</span
+            >
+          </div>
+          <div class="toolbar">
+            <span class="dot"></span
+            ><img src="png/paralume-icon-e-parallel-rails-16.png" /><span
+              class="dot"
+            ></span>
+          </div>
+        </article>
+        <article class="card">
+          <div class="master">
+            <img
+              src="png/paralume-icon-f-split-page-p.png"
+              alt="F 分栏页面 P"
+            />
+          </div>
+          <h2>F — Split-page P</h2>
+          <p class="desc">
+            P 的竖干被分成双栏，内部文本线代表原文与译文在同一页面共存。
+          </p>
+          <div class="sizes">
+            <span
+              ><img
+                class="s16"
+                src="png/paralume-icon-f-split-page-p-16.png"
+              />16px</span
+            ><span
+              ><img
+                class="s32"
+                src="png/paralume-icon-f-split-page-p.png"
+              />32px</span
+            >
+          </div>
+          <div class="toolbar">
+            <span class="dot"></span
+            ><img src="png/paralume-icon-f-split-page-p-16.png" /><span
+              class="dot"
+            ></span>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

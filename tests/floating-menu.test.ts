@@ -7,17 +7,23 @@ afterEach(() => {
 });
 
 describe("page floating menu", () => {
-  it("uses isolated Shadow DOM and makes the dock button translate by default", () => {
+  it("uses isolated Shadow DOM and expands the edge dock before translating", () => {
     const runCommand = vi.fn<
       (
-        command: "translate" | "retry-failed" | "toggle" | "clear",
+        command: "status" | "translate" | "retry-failed" | "toggle" | "clear",
       ) => Promise<void>
     >(() => Promise.resolve());
     const menu = installFloatingMenu(document, runCommand, "en");
 
     expect(menu.host.shadowRoot).not.toBeNull();
     expect(menu.host.getAttribute("data-paralume-owned")).toBe("true");
-    menu.host.shadowRoot
+    const shadow = menu.host.shadowRoot;
+    shadow?.querySelector<HTMLButtonElement>('[data-action="expand"]')?.click();
+    expect(shadow?.querySelector("[data-panel]")?.hasAttribute("hidden")).toBe(
+      false,
+    );
+    expect(runCommand).not.toHaveBeenCalled();
+    shadow
       ?.querySelector<HTMLButtonElement>('[data-action="primary"]')
       ?.click();
     expect(runCommand).toHaveBeenCalledWith("translate");
@@ -26,7 +32,7 @@ describe("page floating menu", () => {
   it("shows working progress and exposes expanded visibility and clear actions", () => {
     const runCommand = vi.fn<
       (
-        command: "translate" | "retry-failed" | "toggle" | "clear",
+        command: "status" | "translate" | "retry-failed" | "toggle" | "clear",
       ) => Promise<void>
     >(() => Promise.resolve());
     const menu = installFloatingMenu(document, runCommand, "zh-CN");
@@ -51,5 +57,35 @@ describe("page floating menu", () => {
       "toggle",
       "clear",
     ]);
+  });
+
+  it("hides for the page or persists a site disable choice", async () => {
+    const disableSite = vi.fn(() => Promise.resolve());
+    const first = installFloatingMenu(
+      document,
+      () => Promise.resolve(undefined),
+      "zh-CN",
+      { siteLabel: "example.com", disableSite },
+    );
+    first.host.shadowRoot
+      ?.querySelector<HTMLButtonElement>('[data-action="hide-page"]')
+      ?.click();
+    expect(first.host.isConnected).toBe(false);
+
+    const second = installFloatingMenu(
+      document,
+      () => Promise.resolve(undefined),
+      "zh-CN",
+      { siteLabel: "example.com", disableSite },
+    );
+    second.host.shadowRoot
+      ?.querySelector<HTMLButtonElement>('[data-action="disable-site"]')
+      ?.click();
+    await vi.waitFor(() => {
+      expect(disableSite).toHaveBeenCalledOnce();
+    });
+    await vi.waitFor(() => {
+      expect(second.host.isConnected).toBe(false);
+    });
   });
 });

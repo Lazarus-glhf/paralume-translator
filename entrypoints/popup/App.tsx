@@ -69,7 +69,7 @@ export function App({
   autoStart = true,
 }: AppProps) {
   const [preferences, setPreferences] = useState(defaults);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(autoStart);
   const [pageState, setPageState] = useState(INITIAL_STATE);
   const [status, setStatus] = useState<MessageDescriptor>({
     id: "popup.ready",
@@ -102,11 +102,13 @@ export function App({
       setError(null);
       setStatus({
         id:
-          command === "translate"
-            ? "popup.translating"
-            : command === "toggle"
-              ? "popup.toggling"
-              : "popup.clearing",
+          command === "status"
+            ? "popup.ready"
+            : command === "translate"
+              ? "popup.translating"
+              : command === "toggle"
+                ? "popup.toggling"
+                : "popup.clearing",
       });
 
       try {
@@ -131,7 +133,7 @@ export function App({
   useEffect(() => {
     if (autoStart && !autoStarted) {
       setAutoStarted(true);
-      void handleAction("translate");
+      void handleAction("status");
     }
   }, [autoStart, autoStarted, handleAction]);
 

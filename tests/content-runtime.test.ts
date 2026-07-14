@@ -121,7 +121,7 @@ describe("programmatically injected content runtime", () => {
       ok: true,
       state: { translationCount: 1 },
     });
-    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
     const translation = document.querySelector<HTMLElement>("p")
       ?.nextElementSibling as HTMLElement | undefined;
     expect(translation?.textContent).toBe("Injected runtime translation.");
@@ -141,7 +141,7 @@ describe("programmatically injected content runtime", () => {
       ),
     ).toBe(true);
     expect(cancelledOperationIds).toEqual([]);
-    expect(settingsRequests).toBe(2);
+    expect(settingsRequests).toBe(3);
     expect(sendMessage).toHaveBeenCalledWith({
       protocolVersion: 1,
       target: "settings",

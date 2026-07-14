@@ -1,4 +1,4 @@
-name: Prerelease
+name: Release
 
 on:
   push:
@@ -7,14 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact package.json version to release (for example, 0.0.3)
+        description: Exact package.json version to release (for example, 0.1.0)
         required: true
         type: string
 
 permissions: {}
 
 concurrency:
-  group: prerelease-${{ github.event_name }}-${{ github.ref_name }}-${{ inputs.version }}
+  group: release-${{ github.event_name }}-${{ github.ref_name }}-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
@@ -110,12 +110,12 @@ jobs:
           retention-days: 14
 
   release:
-    name: Create GitHub prerelease
+    name: Create GitHub release
     needs: package
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
-      name: prerelease
+      name: release
     permissions:
       contents: write
     env:
@@ -135,7 +135,7 @@ jobs:
         working-directory: release-assets
         run: sha256sum --check "${ASSET_PREFIX}-SHA256SUMS.txt"
 
-      - name: Create prerelease from existing tag
+      - name: Create release from existing tag
         if: ${{ github.event_name == 'push' }}
         run: |
           gh release create "$RELEASE_TAG" \
@@ -144,11 +144,10 @@ jobs:
             "release-assets/${ASSET_PREFIX}-SHA256SUMS.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Paralume ${RELEASE_VERSION}" \
-            --notes "Alpha prerelease for tester installation. Verify downloads with the attached SHA-256 checksums." \
-            --prerelease \
+            --notes "Paralume 0.1.0 public release. Verify downloads with the attached SHA-256 checksums." \
             --verify-tag
 
-      - name: Create prerelease and tag from manual dispatch
+      - name: Create release and tag from manual dispatch
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
@@ -160,6 +159,5 @@ jobs:
             "release-assets/${ASSET_PREFIX}-SHA256SUMS.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Paralume ${RELEASE_VERSION}" \
-            --notes "Alpha prerelease for tester installation. Verify downloads with the attached SHA-256 checksums." \
-            --prerelease \
+            --notes "Paralume 0.1.0 public release. Verify downloads with the attached SHA-256 checksums." \
             --verify-tag

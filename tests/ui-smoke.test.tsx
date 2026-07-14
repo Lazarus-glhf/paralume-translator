@@ -78,7 +78,7 @@ afterEach(() => {
 });
 
 describe("localized Popup", () => {
-  it("starts translation when the toolbar popup opens", async () => {
+  it("loads page state without translating when the toolbar popup opens", async () => {
     const runCommand = vi.fn(() =>
       Promise.resolve<ContentResponse>({
         protocolVersion: 1,
@@ -100,13 +100,42 @@ describe("localized Popup", () => {
     await flushEffects();
     await flushEffects();
     expect(runCommand).toHaveBeenCalledOnce();
-    expect(runCommand).toHaveBeenCalledWith("translate");
+    expect(runCommand).toHaveBeenCalledWith("status");
+  });
+
+  it("disables actions until the initial page-state request settles", async () => {
+    let resolveStatus: ((response: ContentResponse) => void) | undefined;
+    const popup = render(
+      <PopupApp
+        runCommand={() =>
+          new Promise<ContentResponse>((resolve) => {
+            resolveStatus = resolve;
+          })
+        }
+        loadContentSettings={() => Promise.resolve(contentSettings())}
+      />,
+    );
+    const translate = popup.querySelector<HTMLButtonElement>(
+      'button[data-action="translate"]',
+    );
+    expect(translate?.disabled).toBe(true);
+
+    await act(async () => {
+      resolveStatus?.({
+        protocolVersion: 1,
+        ok: true,
+        state: { translationCount: 0, failureCount: 0, visible: true },
+        message: { id: "popup.ready" },
+      });
+      await Promise.resolve();
+    });
+    expect(translate?.disabled).toBe(false);
   });
 
   it("runs accessible English actions and formats stable status identifiers", async () => {
     const runCommand = vi.fn(
       (
-        command: "translate" | "retry-failed" | "toggle" | "clear",
+        command: "status" | "translate" | "retry-failed" | "toggle" | "clear",
       ): Promise<ContentResponse> =>
         Promise.resolve({
           protocolVersion: 1,

@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Paralume — Browser icon candidates</title>
+    <style>
+      :root {
+        --ink: #202124;
+        --muted: #686b73;
+        --line: #e3e3e7;
+        --surface: #ffffff;
+        --canvas: #f5f5f7;
+        --violet: #6558e8;
+        --violet-deep: #5042cf;
+        --violet-pale: #eeecff;
+        --coral: #ef876b;
+        --coral-pale: #fff0ec;
+        --shadow: 0 18px 45px rgb(33 31 55 / 8%);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        color: var(--ink);
+        background: var(--canvas);
+        font-synthesis: none;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-width: 320px;
+      }
+      button {
+        font: inherit;
+      }
+      .board {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 52px 0 72px;
+      }
+      .eyebrow {
+        margin: 0 0 10px;
+        color: var(--violet);
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+      h1 {
+        max-width: 760px;
+        margin-bottom: 14px;
+        font-size: clamp(2.3rem, 6vw, 4.3rem);
+        line-height: 0.98;
+        letter-spacing: -0.055em;
+      }
+      .intro {
+        max-width: 650px;
+        margin-bottom: 34px;
+        color: var(--muted);
+        font-size: 1rem;
+        line-height: 1.62;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+        margin: 0 0 28px;
+      }
+      .legend span {
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        background: rgb(255 255 255 / 0.72);
+        color: #52545c;
+        font-size: 0.76rem;
+        font-weight: 650;
+      }
+      .candidate-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .candidate {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: var(--surface);
+        box-shadow: 0 7px 20px rgb(32 33 36 / 3%);
+        transition:
+          box-shadow 0.18s ease,
+          transform 0.18s ease,
+          border-color 0.18s ease;
+      }
+      .candidate:hover {
+        border-color: #c9c5f4;
+        box-shadow: var(--shadow);
+        transform: translateY(-3px);
+      }
+      .candidate.selected {
+        border-color: var(--violet);
+        box-shadow:
+          0 0 0 3px #e1dfff,
+          var(--shadow);
+      }
+      .preview {
+        display: grid;
+        place-items: center;
+        min-height: 238px;
+        padding: 36px;
+        background-color: #f1f0f4;
+        background-image:
+          linear-gradient(45deg, #e9e8ed 25%, transparent 25%),
+          linear-gradient(-45deg, #e9e8ed 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, #e9e8ed 75%),
+          linear-gradient(-45deg, transparent 75%, #e9e8ed 75%);
+        background-size: 22px 22px;
+        background-position:
+          0 0,
+          0 11px,
+          11px -11px,
+          -11px 0;
+      }
+      .preview svg {
+        width: 138px;
+        height: 138px;
+        filter: drop-shadow(0 12px 11px rgb(45 40 90 / 16%));
+      }
+      .copy {
+        padding: 21px 21px 22px;
+      }
+      .candidate-topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .candidate-label {
+        margin: 0;
+        color: var(--violet);
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+      .badge {
+        padding: 4px 7px;
+        border-radius: 99px;
+        background: var(--violet-pale);
+        color: var(--violet-deep);
+        font-size: 0.68rem;
+        font-weight: 750;
+      }
+      h2 {
+        margin-bottom: 7px;
+        font-size: 1.35rem;
+        line-height: 1.05;
+        letter-spacing: -0.035em;
+      }
+      .rationale {
+        min-height: 66px;
+        margin-bottom: 16px;
+        color: var(--muted);
+        font-size: 0.85rem;
+        line-height: 1.55;
+      }
+      .traits {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .traits span {
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: #55575e;
+        font-size: 0.68rem;
+        font-weight: 650;
+      }
+      .comparison {
+        margin-top: 42px;
+        padding: 26px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: var(--surface);
+        box-shadow: 0 12px 35px rgb(32 33 36 / 4%);
+      }
+      .comparison-header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 22px;
+      }
+      h3 {
+        margin: 0;
+        font-size: 1.35rem;
+        letter-spacing: -0.035em;
+      }
+      .comparison-header p {
+        max-width: 470px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.83rem;
+        line-height: 1.5;
+      }
+      .toolbar-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+      .toolbar {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 13px;
+      }
+      .toolbar.dark {
+        border-color: #34353c;
+      }
+      .toolbar-label {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        background: #fafafb;
+        color: #61636b;
+        font-size: 0.68rem;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .dark .toolbar-label {
+        border-color: #34353c;
+        background: #24252b;
+        color: #c4c5cb;
+      }
+      .browser-chrome {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 74px;
+        padding: 15px 17px;
+        background: #fff;
+      }
+      .dark .browser-chrome {
+        background: #1c1d22;
+      }
+      .address {
+        flex: 1;
+        height: 29px;
+        border-radius: 99px;
+        background: #f0f1f3;
+      }
+      .dark .address {
+        background: #2c2d34;
+      }
+      .extension-slot {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+      }
+      .extension-slot + .extension-slot {
+        margin-left: -5px;
+      }
+      .extension-slot.featured {
+        background: #eeecff;
+      }
+      .dark .extension-slot.featured {
+        background: #39345c;
+      }
+      .toolbar svg {
+        display: block;
+      }
+      .size-table {
+        width: 100%;
+        margin-top: 22px;
+        border-collapse: collapse;
+        font-size: 0.78rem;
+      }
+      .size-table th,
+      .size-table td {
+        padding: 11px 10px;
+        border-top: 1px solid var(--line);
+        text-align: center;
+      }
+      .size-table th {
+        color: #6b6d74;
+        font-size: 0.66rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .size-table th:first-child,
+      .size-table td:first-child {
+        text-align: left;
+      }
+      .size-table td {
+        color: #4e5057;
+      }
+      .size-table td:first-child {
+        font-weight: 720;
+      }
+      .swatch {
+        display: inline-grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        background: #f5f4f7;
+        vertical-align: middle;
+      }
+      .choose {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        margin-top: 32px;
+        padding: 18px 20px;
+        border: 1px solid #d9d6fb;
+        border-radius: 14px;
+        background: #f7f6ff;
+      }
+      .choose p {
+        margin: 0;
+        color: #4c477c;
+        font-size: 0.84rem;
+        line-height: 1.45;
+      }
+      .choose strong {
+        color: #312b77;
+      }
+      .choose button {
+        flex: none;
+        padding: 9px 12px;
+        border: 1px solid #c4bef8;
+        border-radius: 9px;
+        background: #fff;
+        color: #4c40c3;
+        cursor: pointer;
+        font-size: 0.78rem;
+        font-weight: 760;
+      }
+      .choose button:hover {
+        background: #eeecff;
+      }
+      .choose button:focus-visible {
+        outline: 3px solid #bbb5ff;
+        outline-offset: 2px;
+      }
+      @media (max-width: 800px) {
+        .candidate-grid {
+          grid-template-columns: 1fr;
+        }
+        .preview {
+          min-height: 210px;
+        }
+        .rationale {
+          min-height: 0;
+        }
+        .toolbar-row {
+          grid-template-columns: 1fr;
+        }
+        .comparison-header,
+        .choose {
+          align-items: start;
+          flex-direction: column;
+        }
+      }
+      @media (max-width: 520px) {
+        .board {
+          width: min(100% - 28px, 1180px);
+          padding-top: 34px;
+        }
+        .comparison {
+          padding: 17px;
+        }
+        .size-table th,
+        .size-table td {
+          padding-inline: 5px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Reusable SVG symbols. Every mark uses a 64px square artboard and a protected outer margin. -->
+    <svg
+      aria-hidden="true"
+      style="position: absolute; width: 0; height: 0; overflow: hidden"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <linearGradient
+          id="pl-gradient"
+          x1="11"
+          y1="9"
+          x2="55"
+          y2="56"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop stop-color="#796cff" />
+          <stop offset="1" stop-color="#5042cf" />
+        </linearGradient>
+        <!-- Candidate A: two reading columns joined by one shared line of meaning. -->
+        <symbol id="icon-parallel" viewBox="0 0 64 64">
+          <rect
+            x="7"
+            y="7"
+            width="50"
+            height="50"
+            rx="15"
+            fill="url(#pl-gradient)"
+          />
+          <path
+            d="M18 20.5h12.5M18 27.5h9M18 34.5h12.5M35.5 20.5H46M38 27.5h8M35.5 34.5H46"
+            stroke="white"
+            stroke-width="3.5"
+            stroke-linecap="round"
+          />
+          <path
+            d="M18 42h28"
+            stroke="#c9c4ff"
+            stroke-width="3.5"
+            stroke-linecap="round"
+          />
+        </symbol>
+        <!-- Candidate B: an open page becomes a prism, suggesting a new reading layer. -->
+        <symbol id="icon-prism" viewBox="0 0 64 64">
+          <rect x="7" y="7" width="50" height="50" rx="15" fill="#202124" />
+          <path
+            d="M16.5 21.5c6.7-2.9 12.5-1.5 15.5 2.4v20.6c-3-3.9-8.8-5.3-15.5-2.4V21.5Z"
+            fill="#fff"
+          />
+          <path
+            d="M47.5 21.5c-6.7-2.9-12.5-1.5-15.5 2.4v20.6c3-3.9 8.8-5.3 15.5-2.4V21.5Z"
+            fill="#c9c4ff"
+          />
+          <path d="M32 23.9v20.6" stroke="#796cff" stroke-width="2.5" />
+          <path
+            d="M22 28.5h5.7M22 34h5.7M36.3 28.5H42M36.3 34H42"
+            stroke="#6558e8"
+            stroke-width="2.4"
+            stroke-linecap="round"
+          />
+        </symbol>
+        <!-- Candidate C: a spoken/language signal held inside a compact reading frame. -->
+        <symbol id="icon-signal" viewBox="0 0 64 64">
+          <rect x="7" y="7" width="50" height="50" rx="15" fill="#fff" />
+          <rect
+            x="7.75"
+            y="7.75"
+            width="48.5"
+            height="48.5"
+            rx="14.25"
+            fill="none"
+            stroke="#6558e8"
+            stroke-width="1.5"
+          />
+          <path
+            d="M20 22.5h24M20 41.5h24"
+            stroke="#e7e4ff"
+            stroke-width="3"
+            stroke-linecap="round"
+          />
+          <path
+            d="M21 32c0-4.6 3.7-8.3 8.3-8.3"
+            stroke="#6558e8"
+            stroke-width="4"
+            stroke-linecap="round"
+          />
+          <path
+            d="M21 32c0 4.6 3.7 8.3 8.3 8.3"
+            stroke="#6558e8"
+            stroke-width="4"
+            stroke-linecap="round"
+          />
+          <path
+            d="M43 32c0-4.6-3.7-8.3-8.3-8.3"
+            stroke="#ef876b"
+            stroke-width="4"
+            stroke-linecap="round"
+          />
+          <path
+            d="M43 32c0 4.6-3.7 8.3-8.3 8.3"
+            stroke="#ef876b"
+            stroke-width="4"
+            stroke-linecap="round"
+          />
+          <circle cx="32" cy="32" r="3.1" fill="#202124" />
+        </symbol>
+      </defs>
+    </svg>
+
+    <main class="board">
+      <p class="eyebrow">Exploration / browser extension icon</p>
+      <h1>Three ways to make bilingual reading feel immediate.</h1>
+      <p class="intro">
+        Icon directions for Paralume: a local-first translator that keeps
+        original text and translation together. These are deliberately built as
+        small, simple marks—where extension icons have to earn their recognition
+        in a 16px toolbar slot.
+      </p>
+      <div class="legend">
+        <span>64px master artwork</span
+        ><span>Designed for Chrome &amp; Edge toolbar</span
+        ><span>Indigo inherited from product UI</span
+        ><span>Transparent-safe exports</span>
+      </div>
+
+      <section class="candidate-grid" aria-label="Three icon candidates">
+        <article class="candidate selected" data-name="A — Parallel lines">
+          <div class="preview">
+            <svg
+              viewBox="0 0 64 64"
+              role="img"
+              aria-label="Parallel lines icon"
+            >
+              <use href="#icon-parallel" />
+            </svg>
+          </div>
+          <div class="copy">
+            <div class="candidate-topline">
+              <p class="candidate-label">Candidate A</p>
+              <span class="badge">Recommended</span>
+            </div>
+            <h2>Parallel lines</h2>
+            <p class="rationale">
+              Two text columns share a single baseline—an abstract, literal cue
+              for reading the original and translation side by side.
+            </p>
+            <div class="traits">
+              <span>Clear at 16px</span><span>Quiet &amp; editorial</span
+              ><span>Distinct silhouette</span>
+            </div>
+          </div>
+        </article>
+        <article class="candidate" data-name="B — Open prism">
+          <div class="preview">
+            <svg viewBox="0 0 64 64" role="img" aria-label="Open prism icon">
+              <use href="#icon-prism" />
+            </svg>
+          </div>
+          <div class="copy">
+            <div class="candidate-topline">
+              <p class="candidate-label">Candidate B</p>
+              <span class="badge">Expressive</span>
+            </div>
+            <h2>Open prism</h2>
+            <p class="rationale">
+              A split, open page carries a second layer of color. It suggests
+              the moment a familiar page unfolds into a new language.
+            </p>
+            <div class="traits">
+              <span>Bookish</span><span>Layered meaning</span
+              ><span>Premium posture</span>
+            </div>
+          </div>
+        </article>
+        <article class="candidate" data-name="C — Language signal">
+          <div class="preview">
+            <svg
+              viewBox="0 0 64 64"
+              role="img"
+              aria-label="Language signal icon"
+            >
+              <use href="#icon-signal" />
+            </svg>
+          </div>
+          <div class="copy">
+            <div class="candidate-topline">
+              <p class="candidate-label">Candidate C</p>
+              <span class="badge">Human</span>
+            </div>
+            <h2>Language signal</h2>
+            <p class="rationale">
+              Two opposing language waves meet at a shared point, contained in a
+              light reading frame. The warm note makes it friendlier.
+            </p>
+            <div class="traits">
+              <span>Most distinctive</span><span>Conversational</span
+              ><span>More color</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="comparison" aria-label="Toolbar comparison">
+        <div class="comparison-header">
+          <div>
+            <p class="eyebrow">Reality check</p>
+            <h3>How they behave where it counts</h3>
+          </div>
+          <p>
+            Each mark is shown in a believable extension slot beside neutral
+            toolbar clutter. Inspect both backgrounds and the true small sizes
+            below before choosing a direction.
+          </p>
+        </div>
+        <div class="toolbar-row">
+          <div class="toolbar">
+            <div class="toolbar-label">Light browser toolbar</div>
+            <div class="browser-chrome">
+              <div class="address"></div>
+              <div class="extension-slot featured">
+                <svg width="24" height="24" viewBox="0 0 64 64">
+                  <use href="#icon-parallel" />
+                </svg>
+              </div>
+              <div class="extension-slot">
+                <svg width="20" height="20" viewBox="0 0 64 64">
+                  <use href="#icon-prism" />
+                </svg>
+              </div>
+              <div class="extension-slot">
+                <svg width="20" height="20" viewBox="0 0 64 64">
+                  <use href="#icon-signal" />
+                </svg>
+              </div>
+            </div>
+          </div>
+          <div class="toolbar dark">
+            <div class="toolbar-label">Dark browser toolbar</div>
+            <div class="browser-chrome">
+              <div class="address"></div>
+              <div class="extension-slot featured">
+                <svg width="24" height="24" viewBox="0 0 64 64">
+                  <use href="#icon-parallel" />
+                </svg>
+              </div>
+              <div class="extension-slot">
+                <svg width="20" height="20" viewBox="0 0 64 64">
+                  <use href="#icon-prism" />
+                </svg>
+              </div>
+              <div class="extension-slot">
+                <svg width="20" height="20" viewBox="0 0 64 64">
+                  <use href="#icon-signal" />
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+        <table class="size-table">
+          <thead>
+            <tr>
+              <th>Size</th>
+              <th>A — Parallel lines</th>
+              <th>B — Open prism</th>
+              <th>C — Language signal</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>16px</td>
+              <td>
+                <span class="swatch"
+                  ><svg width="16" height="16" viewBox="0 0 64 64">
+                    <use href="#icon-parallel" /></svg
+                ></span>
+              </td>
+              <td>
+                <span class="swatch"
+                  ><svg width="16" height="16" viewBox="0 0 64 64">
+                    <use href="#icon-prism" /></svg
+                ></span>
+              </td>
+              <td>
+                <span class="swatch"
+                  ><svg width="16" height="16" viewBox="0 0 64 64">
+                    <use href="#icon-signal" /></svg
+                ></span>
+              </td>
+            </tr>
+            <tr>
+              <td>32px</td>
+              <td>
+                <span class="swatch"
+                  ><svg width="32" height="32" viewBox="0 0 64 64">
+                    <use href="#icon-parallel" /></svg
+                ></span>
+              </td>
+              <td>
+                <span class="swatch"
+                  ><svg width="32" height="32" viewBox="0 0 64 64">
+                    <use href="#icon-prism" /></svg
+                ></span>
+              </td>
+              <td>
+                <span class="swatch"
+                  ><svg width="32" height="32" viewBox="0 0 64 64">
+                    <use href="#icon-signal" /></svg
+                ></span>
+              </td>
+            </tr>
+            <tr>
+              <td>48px</td>
+              <td>
+                <span class="swatch"
+                  ><svg width="48" height="48" viewBox="0 0 64 64">
+                    <use href="#icon-parallel" /></svg
+                ></span>
+              </td>
+              <td>
+                <span class="swatch"
+                  ><svg width="48" height="48" viewBox="0 0 64 64">
+                    <use href="#icon-prism" /></svg
+                ></span>
+              </td>
+              <td>
+                <span class="swatch"
+                  ><svg width="48" height="48" viewBox="0 0 64 64">
+                    <use href="#icon-signal" /></svg
+                ></span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="choose">
+          <p>
+            <strong id="selected-name">A — Parallel lines</strong> is currently
+            highlighted. Click a candidate to change the working selection; this
+            board stores nothing and does not touch extension code.
+          </p>
+          <button id="copy-selection" type="button">Copy selection</button>
+        </div>
+      </section>
+    </main>
+    <script>
+      const cards = document.querySelectorAll(".candidate");
+      const chosen = document.getElementById("selected-name");
+      const copy = document.getElementById("copy-selection");
+      cards.forEach((card) =>
+        card.addEventListener("click", () => {
+          cards.forEach((item) => item.classList.remove("selected"));
+          card.classList.add("selected");
+          chosen.textContent = card.dataset.name;
+        }),
+      );
+      copy.addEventListener("click", async () => {
+        const text = chosen.textContent;
+        try {
+          await navigator.clipboard.writeText(
+            `Paralume icon selection: ${text}`,
+          );
+          copy.textContent = "Copied";
+        } catch {
+          copy.textContent = "Selected";
+        }
+        window.setTimeout(() => {
+          copy.textContent = "Copy selection";
+        }, 1400);
+      });
+    </script>
+  </body>
+</html>

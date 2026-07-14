@@ -8,6 +8,8 @@ export interface MockTranslationProviderOptions {
 
 const TRANSIENT_FIXTURE_PATTERN =
   /^\[\[PARALUME_MOCK_TRANSIENT:([0-9]):(RATE_LIMITED|REQUEST_TIMEOUT|NETWORK_ERROR|SERVER_UNAVAILABLE)\]\]\s*/u;
+const RESULT_FAILURE_FIXTURE_PATTERN =
+  /^\[\[PARALUME_MOCK_RESULT_FAILURE:([0-9]):(RATE_LIMITED|REQUEST_TIMEOUT|NETWORK_ERROR|SERVER_UNAVAILABLE)\]\]\s*/u;
 const transientAttempts = new Map<string, number>();
 
 interface TransientFixture {
@@ -17,21 +19,25 @@ interface TransientFixture {
   attempt: number;
 }
 
-function parseTransientFixture(text: string): TransientFixture | undefined {
-  const match = TRANSIENT_FIXTURE_PATTERN.exec(text);
-  if (match === null) {
-    return undefined;
-  }
+function parseFixture(
+  text: string,
+  pattern: RegExp,
+): TransientFixture | undefined {
+  const match = pattern.exec(text);
+  if (match === null) return undefined;
   const failures = Number(match[1]);
   const code = match[2] as ErrorCode;
   const attempt = (transientAttempts.get(text) ?? 0) + 1;
   transientAttempts.set(text, attempt);
-  return {
-    failures,
-    code,
-    text: text.slice(match[0].length),
-    attempt,
-  };
+  return { failures, code, text: text.slice(match[0].length), attempt };
+}
+
+function parseTransientFixture(text: string): TransientFixture | undefined {
+  return parseFixture(text, TRANSIENT_FIXTURE_PATTERN);
+}
+
+function parseResultFailureFixture(text: string): TransientFixture | undefined {
+  return parseFixture(text, RESULT_FAILURE_FIXTURE_PATTERN);
 }
 
 export function resetMockTransientFailuresForTests(): void {
@@ -56,6 +62,12 @@ export class MockTranslationProvider implements TranslationProvider {
         parseTransientFixture(segment.text),
       ]),
     );
+    const resultFailureFixtures = new Map(
+      request.segments.map((segment) => [
+        segment.id,
+        parseResultFailureFixture(segment.text),
+      ]),
+    );
     const pendingFailure = Array.from(fixtures.values()).find(
       (fixture) => fixture !== undefined && fixture.attempt <= fixture.failures,
     );
@@ -73,7 +85,19 @@ export class MockTranslationProvider implements TranslationProvider {
           };
         }
 
-        const fixture = fixtures.get(segment.id);
+        const resultFailure = resultFailureFixtures.get(segment.id);
+        if (
+          resultFailure !== undefined &&
+          resultFailure.attempt <= resultFailure.failures
+        ) {
+          return {
+            id: segment.id,
+            status: "failure",
+            error: createError(resultFailure.code),
+          };
+        }
+
+        const fixture = fixtures.get(segment.id) ?? resultFailure;
         return {
           id: segment.id,
           status: "success",

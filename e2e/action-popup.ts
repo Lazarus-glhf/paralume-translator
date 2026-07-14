@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface ActionPopup {
+  activeTabId(): Promise<number | undefined>;
   activeTabUrl(): Promise<string | undefined>;
   click(action: "translate" | "toggle" | "clear"): Promise<void>;
   close(): Promise<void>;
@@ -89,6 +90,16 @@ class ActionPopupTarget implements ActionPopup {
       });
       return activeTab?.url;
     })()`)) as string | undefined;
+  }
+
+  async activeTabId(): Promise<number | undefined> {
+    return (await this.evaluate(`(async () => {
+      const [activeTab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      return activeTab?.id;
+    })()`)) as number | undefined;
   }
 
   async click(action: "translate" | "toggle" | "clear"): Promise<void> {
