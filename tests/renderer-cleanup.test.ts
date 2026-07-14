@@ -67,6 +67,9 @@ describe("safe translation rendering", () => {
     expect(translation.getAttribute(PARALUME_TRANSLATION_FOR_ATTRIBUTE)).toBe(
       extracted.segment.id,
     );
+    expect(translation.style.padding).toBe("0.2em 0px 0.35em");
+    expect(translation.style.borderInlineStart).toBe("0 solid transparent");
+    expect(translation.style.transition).toContain("opacity");
   });
 
   it("appends internal divs for list and table blocks without changing structure", () => {
@@ -425,6 +428,42 @@ describe("translation visibility and cleanup", () => {
 
     expect(extractSegments(document, state)).toHaveLength(0);
     expect(clearTranslations(document, state)).toBe(1);
+    button.click();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("releases detached translations, markers, and retry listeners on Clear", () => {
+    document.body.innerHTML = `<p id="source">Readable detached cleanup paragraph</p>`;
+    const state = createContentRuntimeState({ runtimeId: "detached-cleanup" });
+    const extracted = extractSegments(document, state)[0];
+    const onRetry = vi.fn();
+    if (extracted === undefined) {
+      throw new Error("Detached cleanup fixture was not extracted.");
+    }
+    const translation = renderTranslation(
+      extracted,
+      {
+        id: extracted.segment.id,
+        status: "failure",
+        error: createError("NETWORK_ERROR"),
+      },
+      state,
+      true,
+      { locale: "en", onRetry },
+    );
+    const button = translation.querySelector<HTMLButtonElement>("button");
+    if (button === null) {
+      throw new Error("Detached retry control was not created.");
+    }
+    extracted.element.remove();
+
+    expect(clearTranslations(document, state)).toBe(1);
+    expect(state.translations.size).toBe(0);
+    expect(state.sourceMarkers.size).toBe(0);
+    expect(state.retryControls.size).toBe(0);
+    expect(extracted.element.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(
+      false,
+    );
     button.click();
     expect(onRetry).not.toHaveBeenCalled();
   });

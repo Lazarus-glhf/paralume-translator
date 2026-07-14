@@ -175,6 +175,7 @@ describe("extractSegments", () => {
       state.sourceMarkers.set(element, {
         segmentId: segment.id,
         attributeAdded: false,
+        sourceText: segment.text,
       });
     }
 

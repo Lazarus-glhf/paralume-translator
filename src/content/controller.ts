@@ -35,7 +35,9 @@ import type {
   TranslationRequest,
   TranslationResult,
 } from "../shared/types";
+import { DEFAULT_BATCH_LIMITS, type BatchLimits } from "../translation/batcher";
 import { clearTranslations } from "./cleanup";
+import { getCurrentSourceText } from "./text";
 import { extractSegments, type ExtractedSegment } from "./extractor";
 import {
   applyAppearanceToTranslations,
@@ -57,6 +59,7 @@ export interface ContentControllerDependencies {
   loadContentSettings?: () => Promise<ContentSettings>;
   browserUiLanguage?: () => string | undefined;
   pageRequestLimits?: PageRequestLimits;
+  progressiveBatchLimits?: BatchLimits;
 }
 
 export interface ContentController {
@@ -65,7 +68,7 @@ export interface ContentController {
 
 interface ActiveTranslation {
   readonly generation: number;
-  readonly operationId: string;
+  readonly operationIds: Set<string>;
   readonly promise: Promise<ContentResponse>;
 }
 
@@ -149,6 +152,8 @@ export function createContentController(
 ): ContentController {
   const pageRequestLimits =
     dependencies.pageRequestLimits ?? DEFAULT_PAGE_REQUEST_LIMITS;
+  const progressiveBatchLimits =
+    dependencies.progressiveBatchLimits ?? DEFAULT_BATCH_LIMITS;
   let operationGeneration = 0;
   let activeTranslation: ActiveTranslation | undefined;
   let activeSettingsRefresh: ActiveSettingsRefresh | undefined;
@@ -327,7 +332,13 @@ export function createContentController(
       );
     }
 
-    if (generation !== operationGeneration) {
+    if (
+      generation !== operationGeneration ||
+      !extracted.element.isConnected ||
+      !dependencies.document.contains(extracted.element) ||
+      getCurrentSourceText(extracted.element, dependencies.state) !==
+        extracted.segment.text
+    ) {
       return;
     }
     const visible = getContentState(
@@ -363,7 +374,7 @@ export function createContentController(
 
   const performTranslate = async (
     generation: number,
-    operationId: string,
+    operationIds: Set<string>,
   ): Promise<ContentResponse> => {
     try {
       const allExtracted = extractSegments(
@@ -390,60 +401,153 @@ export function createContentController(
         pageRequestLimits,
       );
       const extracted = allExtracted.slice(0, selectedCount);
-      const omitted = allExtracted.length - extracted.length;
+      const pageOmitted = allExtracted.length - extracted.length;
       if (extracted.length === 0) {
         return success(
           dependencies,
-          omitted > 0
-            ? createMessage("content.noFitOmitted", { omitted })
+          pageOmitted > 0
+            ? createMessage("content.noFitOmitted", { omitted: pageOmitted })
             : createMessage("content.noFit"),
         );
       }
 
-      const request: TranslationRequest = {
-        sourceLanguage: "auto",
-        targetLanguage: "zh-CN",
-        segments: extracted.map(({ segment }) => segment),
+      const batches: ExtractedSegment[][] = [];
+      let currentBatch: ExtractedSegment[] = [];
+      let currentCharacters = 0;
+      const flushBatch = (): void => {
+        if (currentBatch.length > 0) {
+          batches.push(currentBatch);
+          currentBatch = [];
+          currentCharacters = 0;
+        }
       };
-      const rawResponse = await dependencies.requestTranslations(
-        request,
-        operationId,
+      for (const item of extracted) {
+        if (
+          currentBatch.length >= progressiveBatchLimits.maxSegments ||
+          currentCharacters + item.segment.text.length >
+            progressiveBatchLimits.maxCharacters
+        ) {
+          flushBatch();
+        }
+        currentBatch.push(item);
+        currentCharacters += item.segment.text.length;
+      }
+      flushBatch();
+
+      let succeeded = 0;
+      let failed = 0;
+      let stale = 0;
+      let firstError: ContentResponse | undefined;
+      let nextBatchIndex = 0;
+      let reservedOperationId = operationIds.values().next().value;
+      const takeOperationId = (): string => {
+        if (reservedOperationId !== undefined) {
+          const operationId = reservedOperationId;
+          reservedOperationId = undefined;
+          return operationId;
+        }
+        const operationId = nextOperationId();
+        operationIds.add(operationId);
+        return operationId;
+      };
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          const batch = batches[nextBatchIndex];
+          nextBatchIndex += 1;
+          if (batch === undefined || generation !== operationGeneration) {
+            return;
+          }
+
+          const operationId = takeOperationId();
+          const request: TranslationRequest = {
+            sourceLanguage: "auto",
+            targetLanguage: "zh-CN",
+            segments: batch.map(({ segment }) => segment),
+          };
+          let rawResponse: unknown;
+          try {
+            rawResponse = await dependencies.requestTranslations(
+              request,
+              operationId,
+            );
+          } catch (error) {
+            if (generation !== operationGeneration) {
+              return;
+            }
+            firstError ??= createErrorResponse(
+              sanitizeError(error, "TRANSLATION_FAILED"),
+            );
+            continue;
+          } finally {
+            operationIds.delete(operationId);
+          }
+          if (generation !== operationGeneration) {
+            return;
+          }
+
+          const parsed = parseTranslationResponse(rawResponse);
+          if (!parsed.ok) {
+            firstError ??= createErrorResponse(parsed.error);
+            continue;
+          }
+          if (!parsed.value.ok) {
+            firstError ??= parsed.value;
+            continue;
+          }
+
+          const byId = mapResultsById(request.segments, parsed.value.results);
+          const shouldBeVisible = getContentState(
+            dependencies.document,
+            dependencies.state,
+          ).visible;
+          for (const item of batch) {
+            if (
+              !item.element.isConnected ||
+              !dependencies.document.contains(item.element) ||
+              getCurrentSourceText(item.element, dependencies.state) !==
+                item.segment.text
+            ) {
+              stale += 1;
+              continue;
+            }
+            const result = byId.get(item.segment.id);
+            if (result === undefined) {
+              continue;
+            }
+            renderResult(
+              item,
+              result,
+              shouldBeVisible,
+              result.status === "failure",
+            );
+            if (result.status === "failure") {
+              failed += 1;
+            } else {
+              succeeded += 1;
+            }
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from(
+          {
+            length: Math.min(
+              progressiveBatchLimits.concurrency,
+              batches.length,
+            ),
+          },
+          () => worker(),
+        ),
       );
       if (generation !== operationGeneration) {
         return cancelled();
       }
-
-      const parsed = parseTranslationResponse(rawResponse);
-      if (!parsed.ok) {
-        return createErrorResponse(parsed.error);
-      }
-      if (!parsed.value.ok) {
-        return parsed.value;
+      if (firstError !== undefined) {
+        return firstError;
       }
 
-      const byId = mapResultsById(request.segments, parsed.value.results);
-      const shouldBeVisible = getContentState(
-        dependencies.document,
-        dependencies.state,
-      ).visible;
-      for (const item of extracted) {
-        const result = byId.get(item.segment.id);
-        if (result !== undefined) {
-          renderResult(
-            item,
-            result,
-            shouldBeVisible,
-            result.status === "failure",
-          );
-        }
-      }
-
-      const succeeded =
-        request.segments.length -
-        Array.from(byId.values()).filter(
-          (result) => result.status === "failure",
-        ).length;
-      const failed = request.segments.length - succeeded;
+      const omitted = pageOmitted + stale;
       return success(
         dependencies,
         omitted > 0
@@ -468,19 +572,19 @@ export function createContentController(
     }
 
     const generation = operationGeneration;
-    const operationId = nextOperationId();
+    const operationIds = new Set<string>([nextOperationId()]);
     const settingsRefresh = refreshSettings(generation);
     const promise =
       settingsRefresh === true
-        ? performTranslate(generation, operationId)
+        ? performTranslate(generation, operationIds)
         : settingsRefresh.then((settingsReady) =>
             settingsReady && generation === operationGeneration
-              ? performTranslate(generation, operationId)
+              ? performTranslate(generation, operationIds)
               : cancelled(),
           );
     const operation: ActiveTranslation = {
       generation,
-      operationId,
+      operationIds,
       promise,
     };
     activeTranslation = operation;
@@ -516,7 +620,9 @@ export function createContentController(
   const clear = (): ContentResponse => {
     const operationIds = new Set<string>();
     if (activeTranslation !== undefined) {
-      operationIds.add(activeTranslation.operationId);
+      for (const operationId of activeTranslation.operationIds) {
+        operationIds.add(operationId);
+      }
     }
     for (const retry of manualRetries.values()) {
       operationIds.add(retry.operationId);

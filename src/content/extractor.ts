@@ -1,8 +1,9 @@
 import type { SourceSegment } from "../shared/types";
+import { invalidateSourceTranslation } from "./cleanup";
 import { CANDIDATE_BLOCK_SELECTOR } from "./constants";
 import { isEligibleCandidate } from "./eligibility";
 import type { ContentRuntimeState } from "./state";
-import { getReadableText } from "./text";
+import { getCurrentSourceText, getReadableText } from "./text";
 
 export interface ExtractedSegment {
   element: HTMLElement;
@@ -46,6 +47,15 @@ export function extractSegments(
   root: ParentNode,
   state: ContentRuntimeState,
 ): readonly ExtractedSegment[] {
+  for (const [source, marker] of Array.from(state.sourceMarkers)) {
+    if (
+      !source.isConnected ||
+      getCurrentSourceText(source, state) !== marker.sourceText
+    ) {
+      invalidateSourceTranslation(source, state);
+    }
+  }
+
   const eligible = Array.from(
     root.querySelectorAll(CANDIDATE_BLOCK_SELECTOR),
   ).filter((element) => isEligibleCandidate(element, state));

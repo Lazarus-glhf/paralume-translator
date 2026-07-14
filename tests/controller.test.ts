@@ -331,6 +331,161 @@ describe("content controller workflow", () => {
     ).toHaveLength(1);
   });
 
+  it("discards a result when the source text changes while translation is pending", async () => {
+    document.body.innerHTML = `<p id="source">Original readable paragraph before an async update.</p>`;
+    const pending = deferred<unknown>();
+    let request: TranslationRequest | undefined;
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "pending-source-update" }),
+      requestTranslations: (nextRequest) => {
+        request = nextRequest;
+        return pending.promise;
+      },
+    });
+
+    const translating = controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    const source = document.querySelector<HTMLElement>("#source");
+    const segment = request?.segments[0];
+    if (source === null || segment === undefined) {
+      throw new Error("Pending source update fixture was not captured.");
+    }
+    source.textContent =
+      "Replacement readable paragraph from the live application.";
+    pending.resolve(
+      successResponse([
+        {
+          id: segment.id,
+          status: "success",
+          translatedText: "Obsolete translation must not render",
+        },
+      ]),
+    );
+
+    await expect(translating).resolves.toMatchObject({
+      ok: true,
+      state: { translationCount: 0 },
+      message: {
+        id: "content.translationSummaryOmitted",
+        values: { succeeded: 0, failed: 0, omitted: 1 },
+      },
+    });
+    expect(source.nextElementSibling).toBeNull();
+    expect(source.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(false);
+  });
+
+  it("retranslates a processed source after its text changes in place", async () => {
+    document.body.innerHTML = `<p id="source">Original readable article paragraph.</p>`;
+    const requests: TranslationRequest[] = [];
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({
+        runtimeId: "processed-source-update",
+      }),
+      requestTranslations: (request) => {
+        requests.push(request);
+        return Promise.resolve(
+          successResponse(
+            request.segments.map((segment) => ({
+              id: segment.id,
+              status: "success" as const,
+              translatedText: `Translated: ${segment.text}`,
+            })),
+          ),
+        );
+      },
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+    const source = document.querySelector<HTMLElement>("#source");
+    if (source === null) {
+      throw new Error("Processed source update fixture was not created.");
+    }
+    source.textContent = "Updated readable article paragraph.";
+
+    await expect(
+      controller.handleMessage(createContentCommand("translate")),
+    ).resolves.toMatchObject({ ok: true, state: { translationCount: 1 } });
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.segments[0]?.text).toBe(
+      "Updated readable article paragraph.",
+    );
+    expect(source.nextElementSibling?.textContent).toBe(
+      "Translated: Updated readable article paragraph.",
+    );
+  });
+
+  it("renders completed page batches without waiting for slower batches", async () => {
+    document.body.replaceChildren(
+      ...Array.from({ length: 21 }, (_, index) => {
+        const paragraph = document.createElement("p");
+        paragraph.id = `batch-${String(index)}`;
+        paragraph.textContent = `Readable progressive paragraph number ${String(index)}.`;
+        return paragraph;
+      }),
+    );
+    const pending = [deferred<unknown>(), deferred<unknown>()];
+    const requests: TranslationRequest[] = [];
+    const operationIds: string[] = [];
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "progressive-batches" }),
+      requestTranslations: (request, operationId) => {
+        requests.push(request);
+        operationIds.push(operationId);
+        return (
+          pending[requests.length - 1]?.promise ??
+          Promise.reject(new Error("Unexpected progressive batch request."))
+        );
+      },
+    });
+
+    const translating = controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    expect(requests.map((request) => request.segments.length)).toEqual([20, 1]);
+    expect(new Set(operationIds).size).toBe(2);
+    const fastSegment = requests[1]?.segments[0];
+    if (fastSegment === undefined) {
+      throw new Error("Progressive batch fixture was not captured.");
+    }
+    pending[1]?.resolve(
+      successResponse([
+        {
+          id: fastSegment.id,
+          status: "success",
+          translatedText: "Fast batch translation",
+        },
+      ]),
+    );
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector("#batch-20")?.nextElementSibling?.textContent,
+      ).toBe("Fast batch translation");
+    });
+    expect(
+      document.querySelector(
+        `#batch-0 + [${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`,
+      ),
+    ).toBeNull();
+
+    pending[0]?.resolve(
+      successResponse(
+        requests[0]?.segments.map((segment) => ({
+          id: segment.id,
+          status: "success" as const,
+          translatedText: `Translated ${segment.text}`,
+        })) ?? [],
+      ),
+    );
+    await expect(translating).resolves.toMatchObject({
+      ok: true,
+      state: { translationCount: 21 },
+    });
+  });
+
   it("clear invalidates pending work and stale results cannot reappear", async () => {
     document.body.innerHTML = `<p>Readable paragraph with cancellable translation work.</p>`;
     const responses = [deferred<unknown>(), deferred<unknown>()];

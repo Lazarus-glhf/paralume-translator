@@ -22,7 +22,7 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
 
 export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
   version: PROVIDER_SETTINGS_VERSION,
-  provider: "mock",
+  provider: "openai",
   openai: {
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-5-mini",

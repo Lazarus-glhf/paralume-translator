@@ -47,11 +47,13 @@ function createTranslationElement(source: HTMLElement): HTMLElement {
   element.className = "paralume-translation";
   element.dir = "auto";
   element.style.boxSizing = "border-box";
-  element.style.padding = "0.65em 0.8em";
-  element.style.borderInlineStart = "3px solid #6a8f7c";
-  element.style.borderRadius = "0 0.35em 0.35em 0";
+  element.style.padding = "0.2em 0 0.35em";
+  element.style.borderInlineStart = "0 solid transparent";
+  element.style.borderRadius = "0.25em";
   element.style.fontStyle = "normal";
   element.style.whiteSpace = "pre-wrap";
+  element.style.overflowWrap = "anywhere";
+  element.style.transition = "opacity 160ms ease, background-color 160ms ease";
 
   return element;
 }
@@ -79,17 +81,17 @@ function placeTranslation(source: HTMLElement, translation: HTMLElement): void {
 function markSource(
   source: HTMLElement,
   segmentId: string,
+  sourceText: string,
   state: ContentRuntimeState,
 ): void {
-  if (state.sourceMarkers.has(source)) {
-    return;
-  }
-
-  const attributeAdded = !source.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE);
+  const existing = state.sourceMarkers.get(source);
+  const attributeAdded =
+    existing?.attributeAdded ??
+    !source.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE);
   if (attributeAdded) {
     source.setAttribute(PARALUME_SOURCE_ID_ATTRIBUTE, segmentId);
   }
-  state.sourceMarkers.set(source, { segmentId, attributeAdded });
+  state.sourceMarkers.set(source, { segmentId, attributeAdded, sourceText });
 }
 
 function applyVisibility(element: HTMLElement, visible: boolean): void {
@@ -195,7 +197,7 @@ export function renderTranslation(
   }
 
   const { element: source } = extracted;
-  markSource(source, extracted.segment.id, state);
+  markSource(source, extracted.segment.id, extracted.segment.text, state);
 
   const existing = state.translationsBySource.get(source);
   const translation = existing ?? createTranslationElement(source);

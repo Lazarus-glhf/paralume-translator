@@ -267,6 +267,45 @@ test.describe("unpacked Chromium extension", () => {
     const articlePage = await context.newPage();
     await articlePage.goto(fixtureUrl);
     await articlePage.bringToFront();
+    await popupPage.evaluate(async () => {
+      const extensionApi = (
+        globalThis as unknown as {
+          chrome: {
+            runtime: { sendMessage(message: unknown): Promise<unknown> };
+          };
+        }
+      ).chrome;
+      await extensionApi.runtime.sendMessage({
+        protocolVersion: 1,
+        target: "settings",
+        command: "save",
+        draft: {
+          provider: "mock",
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            model: "gpt-5-mini",
+            protocol: "responses",
+            reasoningEffort: "low",
+          },
+          microsoft: {
+            endpoint: "https://api.cognitive.microsofttranslator.com",
+            region: "global",
+          },
+          retry: { enabled: true, maxRetries: 2 },
+          appearance: {
+            fontFamily: "system",
+            fontSize: 16,
+            textColor: "#456257",
+            backgroundColor: "#f4f8f5",
+            lineHeight: 1.6,
+            opacity: 1,
+            verticalSpacing: 8,
+          },
+          uiLanguage: "system",
+        },
+        apiKeys: {},
+      });
+    });
 
     const expectedSourceCount = await articlePage
       .locator("[data-expect-translation]")
@@ -692,7 +731,7 @@ test.describe("unpacked Chromium extension", () => {
     await optionsPage.locator('button[data-action="save"]').click();
     await expect
       .poll(() => getOptionsPermissionCalls(optionsPage))
-      .toEqual({ contains: [], request: [[firstOrigin]] });
+      .toEqual({ contains: [[firstOrigin]], request: [[firstOrigin]] });
     await acceptExtensionHostPermission(context, extensionId, firstOrigin);
     await optionsPage.close();
 
@@ -713,7 +752,7 @@ test.describe("unpacked Chromium extension", () => {
     await optionsPage.locator('button[data-action="save"]').click();
     await expect(optionsPage.getByRole("status")).toHaveText("Settings saved.");
     expect(await getOptionsPermissionCalls(optionsPage)).toEqual({
-      contains: [],
+      contains: [[firstOrigin]],
       request: [[firstOrigin]],
     });
     await expect(keyInput).toHaveAttribute("type", "password");
@@ -766,7 +805,7 @@ test.describe("unpacked Chromium extension", () => {
     await optionsPage.locator('button[data-action="save"]').click();
     await expect
       .poll(() => getOptionsPermissionCalls(optionsPage))
-      .toEqual({ contains: [], request: [[secondOrigin]] });
+      .toEqual({ contains: [[secondOrigin]], request: [[secondOrigin]] });
     await acceptExtensionHostPermission(context, extensionId, secondOrigin);
     await optionsPage.close();
 
@@ -782,7 +821,7 @@ test.describe("unpacked Chromium extension", () => {
     await optionsPage.locator('button[data-action="save"]').click();
     await expect(optionsPage.getByRole("status")).toHaveText("Settings saved.");
     expect(await getOptionsPermissionCalls(optionsPage)).toEqual({
-      contains: [],
+      contains: [[secondOrigin]],
       request: [[secondOrigin]],
     });
     await expect

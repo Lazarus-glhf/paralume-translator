@@ -140,13 +140,13 @@ describe("provider settings validation", () => {
 });
 
 describe("versioned settings repository", () => {
-  it("loads migration-safe Mock defaults from empty storage", async () => {
+  it("loads OpenAI-first defaults from empty storage", async () => {
     const repository = createSettingsRepository(createStorage());
 
     await expect(repository.load()).resolves.toEqual(DEFAULT_PROVIDER_SETTINGS);
     await expect(repository.loadPublic()).resolves.toMatchObject({
       version: 2,
-      provider: "mock",
+      provider: "openai",
       retry: DEFAULT_RETRY_SETTINGS,
       appearance: DEFAULT_APPEARANCE_SETTINGS,
       uiLanguage: "system",

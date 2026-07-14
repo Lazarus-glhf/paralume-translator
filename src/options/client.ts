@@ -7,6 +7,7 @@ import {
 } from "../messaging/settings-protocol";
 import type { MessageDescriptor } from "../localization";
 import {
+  getProviderOriginPattern,
   requestProviderOriginPermission,
   removeStaleProviderOriginPermission,
   type ProviderPermissionsApi,
@@ -85,45 +86,72 @@ export function createOptionsClient(
     },
     async save(draft, replacements) {
       const validated = validateProviderSettingsDraft(draft);
+      const requestedOrigin = getProviderOriginPattern(validated);
       const permissionRequest = requestProviderOriginPermission(
         validated,
         permissions,
       );
+      const permissionExisted =
+        requestedOrigin === undefined
+          ? Promise.resolve(true)
+          : Promise.resolve().then(() =>
+              permissions
+                .contains({ origins: [requestedOrigin] })
+                .catch(() => false),
+            );
       await permissionRequest;
-      const previous = publicAsStored(
-        (await send(createGetSettingsMessage())).settings,
-      );
-      const normalizedDraft: ProviderSettingsDraft = {
-        provider: validated.provider,
-        openai: {
-          baseUrl: validated.openai.baseUrl,
-          model: validated.openai.model,
-          protocol: validated.openai.protocol,
-          reasoningEffort: validated.openai.reasoningEffort,
-        },
-        microsoft: {
-          endpoint: validated.microsoft.endpoint,
-          region: validated.microsoft.region,
-        },
-        retry: { ...validated.retry },
-        appearance: { ...validated.appearance },
-        uiLanguage: validated.uiLanguage,
-      };
-      const result = await send(
-        createSaveSettingsMessage(normalizedDraft, replacements),
-      );
-      const removal = await removeStaleProviderOriginPermission(
-        previous,
-        publicAsStored(result.settings),
-        permissions,
-      );
-      if (removal === "failed") {
-        return {
-          settings: result.settings,
-          message: { id: "settings.permissionRemovalFailed" },
+      const wasAlreadyGranted = await permissionExisted;
+      let saved = false;
+      try {
+        const previous = publicAsStored(
+          (await send(createGetSettingsMessage())).settings,
+        );
+        const normalizedDraft: ProviderSettingsDraft = {
+          provider: validated.provider,
+          openai: {
+            baseUrl: validated.openai.baseUrl,
+            model: validated.openai.model,
+            protocol: validated.openai.protocol,
+            reasoningEffort: validated.openai.reasoningEffort,
+          },
+          microsoft: {
+            endpoint: validated.microsoft.endpoint,
+            region: validated.microsoft.region,
+          },
+          retry: { ...validated.retry },
+          appearance: { ...validated.appearance },
+          uiLanguage: validated.uiLanguage,
         };
+        const result = await send(
+          createSaveSettingsMessage(normalizedDraft, replacements),
+        );
+        saved = true;
+        const removal = await removeStaleProviderOriginPermission(
+          previous,
+          publicAsStored(result.settings),
+          permissions,
+        );
+        if (removal === "failed") {
+          return {
+            settings: result.settings,
+            message: { id: "settings.permissionRemovalFailed" },
+          };
+        }
+        return result;
+      } finally {
+        if (
+          !saved &&
+          !wasAlreadyGranted &&
+          requestedOrigin !== undefined &&
+          permissions.remove !== undefined
+        ) {
+          try {
+            await permissions.remove({ origins: [requestedOrigin] });
+          } catch {
+            // The original save error remains the actionable failure.
+          }
+        }
       }
-      return result;
     },
     clearApiKey(provider) {
       return send(createClearApiKeyMessage(provider));

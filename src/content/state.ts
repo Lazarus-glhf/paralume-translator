@@ -1,6 +1,7 @@
 export interface SourceMarkerState {
   readonly segmentId: string;
   readonly attributeAdded: boolean;
+  readonly sourceText: string;
 }
 
 export interface ContentRuntimeState {

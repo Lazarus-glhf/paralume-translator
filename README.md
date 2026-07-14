@@ -62,14 +62,16 @@ Open the popup and explicitly choose an action:
 Repeated popup actions and repeated runtime injection are idempotent. Original
 DOM nodes, inline links, event listeners, and framework ownership are retained;
 provider output is inserted with `textContent`, never as executable HTML.
-Concurrent Translate commands share one in-flight request. Every page or manual
-retry operation uses a validated opaque UUID. The background keys active work
-and bounded early-cancellation state by the composite `(sender scope,
-operation UUID)`, so the same UUID in another tab/document cannot collide,
-cancel, consume, or evict a sender's operation. Toggle updates only translations
-currently present and does not wait for settings. Pending results use the
-current visibility when they finish; if no translation exists yet, Toggle is a
-no-op.
+Concurrent Translate commands share one in-flight page task. Paralume splits that task
+into provider-sized batches (up to 20 segments and 6,000 source characters), runs at
+most three batches concurrently, and renders each completed batch immediately instead
+of waiting for the slowest batch. Every batch and manual retry has its own validated
+opaque UUID, and Clear cancels all active batch operations. Before rendering an async
+result, the content runtime verifies that its source remains in the current document
+and still matches the captured normalized text; changed or detached sources are skipped
+and remain eligible for a later Translate action. Original DOM nodes, inline links,
+event listeners, and framework ownership are retained; provider output is inserted
+with `textContent`, never as executable HTML.
 
 The Options page selects the provider, edits provider-specific settings, saves
 or clears masked credentials, and runs a one-segment connection test. A blank
@@ -123,10 +125,12 @@ both API keys while adding retry, appearance, and language defaults. Public
 settings responses never include keys:
 
 - **Mock** is deterministic development output and must be selected explicitly.
-- **OpenAI-compatible** accepts an HTTPS Base URL, model, reasoning effort, API
+- **OpenAI-compatible** is the fresh-install default. It accepts an HTTPS Base URL, model, reasoning effort, API
   key, and a user-selected protocol: Responses (`/responses`) or Chat
-  Completions (`/chat/completions`). The selected endpoint must support strict
-  `json_schema` output and the chosen protocol's reasoning field
+  Completions (`/chat/completions`). Until a key and exact origin permission are
+  configured, Translate reports the configuration error clearly and never falls
+  back to Mock. The selected endpoint must support strict `json_schema` output
+  and the chosen protocol's reasoning field
   (`reasoning.effort` for Responses or `reasoning_effort` for Chat
   Completions). Chat content may be a string or an array containing only common
   text parts; other content parts are rejected. Paralume requires stable

@@ -250,8 +250,15 @@ describe("Options settings client", () => {
     await expect(saving).resolves.toMatchObject({
       message: { id: "settings.saved" },
     });
-    expect(events).toEqual(["request", "background:get", "background:save"]);
-    expect(permissions.contains).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      "request",
+      "contains",
+      "background:get",
+      "background:save",
+    ]);
+    expect(permissions.contains).toHaveBeenCalledWith({
+      origins: ["https://api.example.com/*"],
+    });
     expect(permissions.request).toHaveBeenCalledWith({
       origins: ["https://api.example.com/*"],
     });
@@ -295,6 +302,37 @@ describe("Options settings client", () => {
       client.save(draft, { openaiApiKey: "denied-credential-marker" }),
     ).rejects.toMatchObject({ code: "PERMISSION_MISSING" });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rolls back a newly granted origin when saving settings fails", async () => {
+    const permissions: ProviderPermissionsApi = {
+      contains: vi.fn(() => Promise.resolve(false)),
+      request: vi.fn(() => Promise.resolve(true)),
+      remove: vi.fn(() => Promise.resolve(true)),
+    };
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        protocolVersion: 1,
+        ok: true,
+        settings: {
+          version: 2,
+          provider: "mock",
+          openai: { ...draft.openai, apiKeyConfigured: false },
+          microsoft: { ...draft.microsoft, apiKeyConfigured: false },
+          retry: draft.retry,
+          appearance: draft.appearance,
+          uiLanguage: draft.uiLanguage,
+        },
+        message: { id: "settings.loaded" },
+      })
+      .mockRejectedValueOnce(new Error("save transport failed"));
+    const client = createOptionsClient({ sendMessage }, permissions);
+
+    await expect(client.save(draft, {})).rejects.toBeDefined();
+    expect(permissions.remove).toHaveBeenCalledWith({
+      origins: ["https://api.example.com/*"],
+    });
   });
 
   it("removes a stale exact origin after saving a changed endpoint", async () => {
