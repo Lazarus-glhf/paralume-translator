@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   formatDescriptor,
@@ -27,6 +27,7 @@ export interface AppProps {
   runCommand?: (command: ContentCommand) => Promise<ContentResponse>;
   loadContentSettings?: () => Promise<ContentSettings>;
   getBrowserUiLanguage?: () => string | undefined;
+  autoStart?: boolean;
 }
 
 const INITIAL_STATE: ContentState = {
@@ -65,6 +66,7 @@ export function App({
   runCommand = runPageCommand,
   loadContentSettings = loadPopupContentSettings,
   getBrowserUiLanguage = browserUiLanguage,
+  autoStart = true,
 }: AppProps) {
   const [preferences, setPreferences] = useState(defaults);
   const [busy, setBusy] = useState(false);
@@ -73,6 +75,7 @@ export function App({
     id: "popup.ready",
   });
   const [error, setError] = useState<ErrorCode | null>(null);
+  const [autoStarted, setAutoStarted] = useState(false);
   const locale = resolveUiLocale(
     preferences.uiLanguage,
     readBrowserUiLanguage(getBrowserUiLanguage),
@@ -93,32 +96,44 @@ export function App({
     };
   }, [loadContentSettings]);
 
-  const handleAction = async (command: ContentCommand) => {
-    setBusy(true);
-    setError(null);
-    setStatus({
-      id:
-        command === "translate"
-          ? "popup.translating"
-          : command === "toggle"
-            ? "popup.toggling"
-            : "popup.clearing",
-    });
+  const handleAction = useCallback(
+    async (command: ContentCommand) => {
+      setBusy(true);
+      setError(null);
+      setStatus({
+        id:
+          command === "translate"
+            ? "popup.translating"
+            : command === "toggle"
+              ? "popup.toggling"
+              : "popup.clearing",
+      });
 
-    try {
-      const response = await runCommand(command);
-      if (response.ok) {
-        setPageState(response.state);
-        setStatus(response.message);
-      } else {
-        setError(response.error.code);
+      try {
+        const response = await runCommand(command);
+        if (response.ok) {
+          setPageState(response.state);
+          setStatus(response.message);
+        } else {
+          setStatus({ id: "popup.ready" });
+          setError(response.error.code);
+        }
+      } catch (caught) {
+        setStatus({ id: "popup.ready" });
+        setError(sanitizeError(caught).code);
+      } finally {
+        setBusy(false);
       }
-    } catch (caught) {
-      setError(sanitizeError(caught).code);
-    } finally {
-      setBusy(false);
+    },
+    [runCommand],
+  );
+
+  useEffect(() => {
+    if (autoStart && !autoStarted) {
+      setAutoStarted(true);
+      void handleAction("translate");
     }
-  };
+  }, [autoStart, autoStarted, handleAction]);
 
   return (
     <main

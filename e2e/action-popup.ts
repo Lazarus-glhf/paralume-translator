@@ -6,6 +6,7 @@ export interface ActionPopup {
   activeTabUrl(): Promise<string | undefined>;
   click(action: "translate" | "toggle" | "clear"): Promise<void>;
   close(): Promise<void>;
+  statusText(): Promise<string | undefined>;
   waitForStatus(expected: string): Promise<void>;
 }
 
@@ -105,6 +106,12 @@ class ActionPopupTarget implements ActionPopup {
       }
       button.click();
     })()`);
+  }
+
+  async statusText(): Promise<string | undefined> {
+    return (await this.evaluate(
+      `document.querySelector('[role="status"]')?.textContent?.trim()`,
+    )) as string | undefined;
   }
 
   async waitForStatus(expected: string): Promise<void> {

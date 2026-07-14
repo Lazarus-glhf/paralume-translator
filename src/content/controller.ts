@@ -60,6 +60,13 @@ export interface ContentControllerDependencies {
   browserUiLanguage?: () => string | undefined;
   pageRequestLimits?: PageRequestLimits;
   progressiveBatchLimits?: BatchLimits;
+  onProgress?: (progress: TranslationProgress) => void;
+}
+
+export interface TranslationProgress {
+  phase: "idle" | "translating" | "complete" | "error";
+  completed: number;
+  total: number;
 }
 
 export interface ContentController {
@@ -412,6 +419,10 @@ export function createContentController(
       }
 
       const batches: ExtractedSegment[][] = [];
+      const firstBatch = extracted.slice(0, 4);
+      if (firstBatch.length > 0) {
+        batches.push(firstBatch);
+      }
       let currentBatch: ExtractedSegment[] = [];
       let currentCharacters = 0;
       const flushBatch = (): void => {
@@ -421,7 +432,7 @@ export function createContentController(
           currentCharacters = 0;
         }
       };
-      for (const item of extracted) {
+      for (const item of extracted.slice(firstBatch.length)) {
         if (
           currentBatch.length >= progressiveBatchLimits.maxSegments ||
           currentCharacters + item.segment.text.length >
@@ -433,6 +444,11 @@ export function createContentController(
         currentCharacters += item.segment.text.length;
       }
       flushBatch();
+      dependencies.onProgress?.({
+        phase: "translating",
+        completed: 0,
+        total: extracted.length,
+      });
 
       let succeeded = 0;
       let failed = 0;
@@ -526,6 +542,11 @@ export function createContentController(
               succeeded += 1;
             }
           }
+          dependencies.onProgress?.({
+            phase: "translating",
+            completed: succeeded + failed + stale,
+            total: extracted.length,
+          });
         }
       };
 
@@ -544,10 +565,20 @@ export function createContentController(
         return cancelled();
       }
       if (firstError !== undefined) {
+        dependencies.onProgress?.({
+          phase: "error",
+          completed: succeeded + failed + stale,
+          total: extracted.length,
+        });
         return firstError;
       }
 
       const omitted = pageOmitted + stale;
+      dependencies.onProgress?.({
+        phase: "complete",
+        completed: succeeded + failed + stale,
+        total: extracted.length,
+      });
       return success(
         dependencies,
         omitted > 0
@@ -635,6 +666,7 @@ export function createContentController(
     for (const operationId of operationIds) {
       cancelOperation(operationId);
     }
+    dependencies.onProgress?.({ phase: "idle", completed: 0, total: 0 });
     const removed = clearTranslations(
       dependencies.document,
       dependencies.state,

@@ -62,13 +62,15 @@ Open the popup and explicitly choose an action:
 Repeated popup actions and repeated runtime injection are idempotent. Original
 DOM nodes, inline links, event listeners, and framework ownership are retained;
 provider output is inserted with `textContent`, never as executable HTML.
-Concurrent Translate commands share one in-flight page task. Paralume splits that task
-into provider-sized batches (up to 20 segments and 6,000 source characters), runs at
-most three batches concurrently, and renders each completed batch immediately instead
-of waiting for the slowest batch. Every batch and manual retry has its own validated
-opaque UUID, and Clear cancels all active batch operations. Before rendering an async
-result, the content runtime verifies that its source remains in the current document
-and still matches the captured normalized text; changed or detached sources are skipped
+Concurrent Translate commands share one in-flight page task. Paralume prioritizes
+readable blocks intersecting the current viewport, sends a four-block first-response
+batch, then uses provider-sized follow-up batches (up to 20 segments and 6,000 source
+characters) with at most three requests in flight. Each completed batch renders
+immediately instead of waiting for the slowest batch. Visible documentation code blocks
+(`pre`) are translated as one block; nested code spans are not duplicated. Every batch
+and manual retry has its own validated opaque UUID, and Clear cancels all active batch
+operations. Before rendering an async result, the content runtime verifies that its
+source remains in the current document and still matches the captured normalized text; changed or detached sources are skipped
 and remain eligible for a later Translate action. Original DOM nodes, inline links,
 event listeners, and framework ownership are retained; provider output is inserted
 with `textContent`, never as executable HTML.
@@ -161,13 +163,16 @@ translation, per-segment failure, content-controller, or popup error responses.
 ## Retry, appearance, and language
 
 Appearance settings affect only Paralume-owned translation, failure, pending,
-and Retry UI. They never alter source-page styles. Supported settings are a
-bounded font-family enum, font size, text color, background color, line height,
-opacity, and vertical spacing. Numeric values are clamped to reviewed ranges,
-colors are normalized safe hexadecimal values, and arbitrary CSS declarations,
-URLs, and executable values are rejected. Reset appearance restores safe
-defaults. New settings apply to future translations and to existing owned nodes
-when the injected runtime next refreshes settings.
+Retry, and floating-control UI. By default, each translation follows its own source
+block's computed typography: font family and size, weight, style, line height, spacing,
+alignment, text transform, direction, and preformatted whitespace. Headings,
+paragraphs, quotes, table cells, and code blocks therefore retain distinct hierarchy.
+Explicit font-family, font-size, or line-height settings override only that matching
+source-derived field. Source text/background colors and opacity are also followed while
+the matching appearance setting remains at its safe default; changing that setting makes
+it an explicit override. Translation spacing remains a validated Paralume control.
+Source DOM nodes and inline styles are not rewritten; arbitrary CSS declarations, URLs,
+and executable values remain rejected.
 
 Interface language choices are `system` (default), `zh-CN`, and `en`. System
 resolution uses the browser UI language with a safe English fallback. Popup,

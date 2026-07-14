@@ -21,11 +21,12 @@ const translationSelector =
   '[data-paralume-owned="true"][data-paralume-translation-for]';
 const paralumeMarkerSelector = [
   "[data-paralume-source-id]",
-  "[data-paralume-owned]",
   "[data-paralume-translation-for]",
   "[data-paralume-translation-status]",
   "[data-paralume-retry]",
 ].join(", ");
+const floatingMenuSelector =
+  '[data-paralume-owned="true"]:not([data-paralume-translation-for])';
 
 interface ChromiumExtensionApi {
   tabs: {
@@ -321,10 +322,11 @@ test.describe("unpacked Chromium extension", () => {
     try {
       expect(await actionPopup.activeTabUrl()).toBe(fixtureUrl);
 
-      await actionPopup.click("translate");
-      await actionPopup.waitForStatus(
-        `Translated ${String(expectedSourceCount)} readable blocks; 0 unavailable.`,
-      );
+      await expect
+        .poll(() => actionPopup.statusText())
+        .toBe(
+          `Translated ${String(expectedSourceCount)} readable blocks; 0 unavailable.`,
+        );
       await expect(articlePage.locator(translationSelector)).toHaveCount(
         expectedSourceCount,
       );
@@ -365,6 +367,7 @@ test.describe("unpacked Chromium extension", () => {
       );
       await expect(articlePage.locator(translationSelector)).toHaveCount(0);
       await expect(articlePage.locator(paralumeMarkerSelector)).toHaveCount(0);
+      await expect(articlePage.locator(floatingMenuSelector)).toHaveCount(1);
     } finally {
       await actionPopup.close();
     }
@@ -456,6 +459,46 @@ test.describe("unpacked Chromium extension", () => {
     await expect(articlePage.locator(translationSelector)).toHaveCount(
       expectedSourceCount,
     );
+    const typographyPairs = await articlePage.evaluate(() =>
+      ["article-title", "linked-paragraph", "preformatted-code"].map((id) => {
+        const source = document.getElementById(id);
+        const translation = source?.nextElementSibling;
+        if (
+          !(source instanceof HTMLElement) ||
+          !(translation instanceof HTMLElement)
+        ) {
+          throw new Error(`Missing typography pair for ${id}`);
+        }
+        const sourceStyle = getComputedStyle(source);
+        const translationStyle = getComputedStyle(translation);
+        return {
+          id,
+          source: {
+            fontFamily: sourceStyle.fontFamily,
+            fontSize: sourceStyle.fontSize,
+            fontWeight: sourceStyle.fontWeight,
+            lineHeight: sourceStyle.lineHeight,
+            letterSpacing: sourceStyle.letterSpacing,
+            textAlign: sourceStyle.textAlign,
+          },
+          translation: {
+            fontFamily: translationStyle.fontFamily,
+            fontSize: translationStyle.fontSize,
+            fontWeight: translationStyle.fontWeight,
+            lineHeight: translationStyle.lineHeight,
+            letterSpacing: translationStyle.letterSpacing,
+            textAlign: translationStyle.textAlign,
+          },
+        };
+      }),
+    );
+    for (const pair of typographyPairs) {
+      expect(pair.translation).toEqual(pair.source);
+    }
+    expect(
+      new Set(typographyPairs.map((pair) => pair.translation.fontSize)).size,
+    ).toBe(3);
+
     const interleaved = await articlePage
       .locator("[data-expect-translation]")
       .evaluateAll((sources) =>
@@ -1077,16 +1120,35 @@ test.describe("unpacked Chromium extension", () => {
       extensionId,
       retryPage,
     );
-    try {
-      await actionPopup.click("translate");
-      await actionPopup.waitForStatus("已翻译 1 个可读文本块；0 个不可用。");
-      const automaticTranslation = retryPage.locator(
-        `#automatic-source + ${translationSelector}`,
-      );
-      await expect(automaticTranslation).toHaveText(
-        "【Mock zh-CN attempt 3】Automatic retry fixture text.",
-      );
+    await actionPopup.waitForStatus("正在翻译…");
+    await actionPopup.close();
+    await expect
+      .poll(() =>
+        retryPage.evaluate(() => {
+          const host = document.querySelector('[data-paralume-owned="true"]');
+          if (host === null) {
+            return undefined;
+          }
+          return host.shadowRoot
+            ?.querySelector('[role="status"]')
+            ?.textContent.trim();
+        }),
+      )
+      .toContain("/");
+    const automaticTranslation = retryPage.locator(
+      `#automatic-source + ${translationSelector}`,
+    );
+    await expect(automaticTranslation).toHaveText(
+      "【Mock zh-CN attempt 3】Automatic retry fixture text.",
+    );
 
+    const resumedPopup = await triggerActionPopup(
+      context,
+      browserCdp,
+      extensionId,
+      retryPage,
+    );
+    try {
       await retryPage.evaluate(() => {
         const manual = document.createElement("p");
         manual.id = "manual-source";
@@ -1099,8 +1161,8 @@ test.describe("unpacked Chromium extension", () => {
         .locator("#manual-source")
         .getAttribute("style");
 
-      await actionPopup.click("translate");
-      await actionPopup.waitForStatus("已翻译 0 个可读文本块；1 个不可用。");
+      await resumedPopup.click("translate");
+      await resumedPopup.waitForStatus("已翻译 0 个可读文本块；1 个不可用。");
       const manualFailure = retryPage.locator(
         `#manual-source + ${translationSelector}`,
       );
@@ -1156,8 +1218,8 @@ test.describe("unpacked Chromium extension", () => {
         )
         .toBe(1);
 
-      await actionPopup.click("clear");
-      await actionPopup.waitForStatus("已清除 2 条译文。");
+      await resumedPopup.click("clear");
+      await resumedPopup.waitForStatus("已清除 2 条译文。");
       await expect(retryPage.locator(translationSelector)).toHaveCount(0);
       await expect(retryPage.locator(paralumeMarkerSelector)).toHaveCount(0);
       await retryPage.locator("#page-button").click();
@@ -1169,7 +1231,7 @@ test.describe("unpacked Chromium extension", () => {
         )
         .toBe(2);
     } finally {
-      await actionPopup.close();
+      await resumedPopup.close();
       await retryPage.close();
     }
   });

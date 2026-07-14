@@ -266,6 +266,58 @@ describe("safe translation rendering", () => {
     ).toBeNull();
   });
 
+  it("follows each source block's typography while preserving safe appearance overrides", () => {
+    document.body.innerHTML = `
+      <article>
+        <h2 id="heading" style="font-family: Georgia; font-size: 34px; font-weight: 700; line-height: 1.2; letter-spacing: 2px; text-align: center; text-transform: uppercase; color: rgb(42, 51, 66); background-color: rgb(240, 242, 248); opacity: 0.9">Readable source heading</h2>
+        <p id="body" style="font-family: Arial; font-size: 15px; font-weight: 400; line-height: 1.75; text-align: start">Readable body paragraph content.</p>
+        <pre id="code" style="font-family: monospace; font-size: 13px; line-height: 1.45; tab-size: 4"><code>const readableGuidance = true;</code></pre>
+      </article>
+    `;
+    const state = createContentRuntimeState({ runtimeId: "source-typography" });
+    const extracted = extractSegments(document, state);
+    const translations = extracted.map((item) =>
+      renderTranslation(
+        item,
+        {
+          id: item.segment.id,
+          status: "success",
+          translatedText: `译文 ${item.segment.text}`,
+        },
+        state,
+      ),
+    );
+
+    expect(translations).toHaveLength(3);
+    expect(translations[0]?.style.fontFamily).toContain("Georgia");
+    expect(translations[0]?.style.fontSize).toBe("34px");
+    expect(translations[0]?.style.fontWeight).toBe("700");
+    expect(translations[0]?.style.lineHeight).toBe("1.2");
+    expect(translations[0]?.style.letterSpacing).toBe("2px");
+    expect(translations[0]?.style.textAlign).toBe("center");
+    expect(translations[0]?.style.textTransform).toBe("uppercase");
+    expect(translations[0]?.style.color).toBe("rgb(42, 51, 66)");
+    expect(translations[0]?.style.backgroundColor).toBe("rgb(240, 242, 248)");
+    expect(translations[0]?.style.opacity).toBe("0.9");
+    expect(translations[1]?.style.fontFamily).toContain("Arial");
+    expect(translations[1]?.style.fontSize).toBe("15px");
+    expect(translations[1]?.style.lineHeight).toBe("1.75");
+    expect(translations[2]?.style.fontFamily).toContain("monospace");
+    expect(translations[2]?.style.whiteSpace).toBe("pre-wrap");
+
+    applyAppearanceToTranslations(document, state, {
+      ...DEFAULT_APPEARANCE_SETTINGS,
+      fontFamily: "serif",
+      fontSize: 21,
+      lineHeight: 2,
+    });
+    expect(translations[0]?.style.fontFamily).toContain("serif");
+    expect(translations[0]?.style.fontSize).toBe("21px");
+    expect(translations[0]?.style.lineHeight).toBe("2");
+    expect(translations[0]?.style.fontWeight).toBe("700");
+    expect(translations[1]?.style.textAlign).toBe("start");
+  });
+
   it("applies validated appearance only to owned existing/future UI", () => {
     document.body.innerHTML = `<p id="source" style="color: rgb(1, 2, 3); margin: 19px">Readable appearance source paragraph</p>`;
     const source = document.querySelector<HTMLElement>("#source");

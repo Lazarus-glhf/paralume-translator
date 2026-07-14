@@ -13,11 +13,11 @@ export const DEFAULT_RETRY_SETTINGS: RetrySettings = {
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   fontFamily: "system",
   fontSize: 16,
-  textColor: "#456257",
-  backgroundColor: "#f4f8f5",
-  lineHeight: 1.6,
+  textColor: "#52525b",
+  backgroundColor: "#fafafa",
+  lineHeight: 1.68,
   opacity: 1,
-  verticalSpacing: 8,
+  verticalSpacing: 6,
 };
 
 export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {

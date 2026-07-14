@@ -3,8 +3,6 @@ import type { ContentRuntimeState } from "./state";
 import { getReadableText, hasMeaningfulText } from "./text";
 
 const EXCLUDED_ANCESTOR_SELECTOR = [
-  "code",
-  "pre",
   "script",
   "style",
   "form",
@@ -107,6 +105,7 @@ export function isEligibleCandidate(
     hasProcessedStructuralAncestor(element, state) ||
     isRuntimeOwned(element, state) ||
     element.closest(EXCLUDED_ANCESTOR_SELECTOR) !== null ||
+    (element.tagName !== "PRE" && element.closest("code, pre") !== null) ||
     isEditable(element) ||
     isHidden(element)
   ) {

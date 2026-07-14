@@ -9,6 +9,7 @@ export interface ContentRuntimeState {
   readonly ownedNodes: WeakSet<Node>;
   readonly translations: Set<HTMLElement>;
   readonly translationsBySource: WeakMap<HTMLElement, HTMLElement>;
+  readonly sourcesByTranslation: WeakMap<HTMLElement, HTMLElement>;
   readonly translationStatuses: WeakMap<HTMLElement, "success" | "failure">;
   readonly retryControls: Map<
     HTMLElement,
@@ -43,6 +44,7 @@ export function createContentRuntimeState(
     ownedNodes: new WeakSet(),
     translations: new Set(),
     translationsBySource: new WeakMap(),
+    sourcesByTranslation: new WeakMap(),
     translationStatuses: new WeakMap(),
     retryControls: new Map(),
     sourceMarkers: new Map(),

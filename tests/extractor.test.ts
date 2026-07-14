@@ -54,6 +54,63 @@ describe("extractSegments", () => {
     ).toEqual(["H1", "P", "LI", "BLOCKQUOTE", "TH", "TD", "FIGCAPTION"]);
   });
 
+  it("extracts a preformatted documentation block as one text segment", () => {
+    document.body.innerHTML = `
+      <article>
+        <pre id="guidance"><code>For ordinary Q&amp;A, start with one broad search using short, discriminative
+keywords. If the top results contain enough support, answer from those results.</code></pre>
+        <p>Readable paragraph after the code sample.</p>
+      </article>
+    `;
+
+    const extracted = extractSegments(
+      document,
+      createContentRuntimeState({ runtimeId: "preformatted-docs" }),
+    );
+
+    expect(extracted.map(({ element }) => element.tagName)).toEqual([
+      "PRE",
+      "P",
+    ]);
+    expect(extracted[0]?.segment.text).toContain(
+      "For ordinary Q&A, start with one broad search",
+    );
+  });
+
+  it("prioritizes visible reading blocks while preserving order within each group", () => {
+    document.body.innerHTML = `
+      <p id="above">Readable paragraph above the current viewport.</p>
+      <p id="visible-a">First readable paragraph in the current viewport.</p>
+      <p id="visible-b">Second readable paragraph in the current viewport.</p>
+      <p id="below">Readable paragraph below the current viewport.</p>
+    `;
+    const rect = (top: number, bottom: number) =>
+      ({ top, bottom, width: 500, height: bottom - top }) as DOMRect;
+    const above = document.querySelector<HTMLElement>("#above");
+    const visibleA = document.querySelector<HTMLElement>("#visible-a");
+    const visibleB = document.querySelector<HTMLElement>("#visible-b");
+    const below = document.querySelector<HTMLElement>("#below");
+    if (
+      above === null ||
+      visibleA === null ||
+      visibleB === null ||
+      below === null
+    ) {
+      throw new Error("Viewport priority fixture was not created.");
+    }
+    above.getBoundingClientRect = () => rect(-200, -150);
+    visibleA.getBoundingClientRect = () => rect(80, 120);
+    visibleB.getBoundingClientRect = () => rect(160, 200);
+    below.getBoundingClientRect = () => rect(1200, 1240);
+
+    expect(
+      extractSegments(
+        document,
+        createContentRuntimeState({ runtimeId: "viewport-priority" }),
+      ).map(({ element }) => element.id),
+    ).toEqual(["visible-a", "visible-b", "below", "above"]);
+  });
+
   it("excludes unsafe, interactive, hidden, editable, and runtime-owned regions", () => {
     document.body.innerHTML = `
       <p>Visible eligible paragraph</p>
@@ -87,6 +144,7 @@ describe("extractSegments", () => {
       extractSegments(document, state).map(({ segment }) => segment.text),
     ).toEqual([
       "Visible eligible paragraph",
+      "Paragraph inside preformatted content",
       "Host paragraph with spoofed ownership",
       "Host paragraph with spoofed source marker",
     ]);

@@ -5,7 +5,10 @@ import {
   PARALUME_SOURCE_ID_ATTRIBUTE,
   PARALUME_TRANSLATION_FOR_ATTRIBUTE,
 } from "../src/content/constants";
-import { createContentController } from "../src/content/controller";
+import {
+  createContentController,
+  type TranslationProgress,
+} from "../src/content/controller";
 import { createContentRuntimeState } from "../src/content/state";
 import { createContentCommand } from "../src/messaging/protocol";
 import type {
@@ -94,10 +97,10 @@ describe("content controller workflow", () => {
 
     expect(response).toMatchObject({
       ok: true,
-      state: { translationCount: 2, failureCount: 1, visible: true },
+      state: { translationCount: 3, failureCount: 2, visible: true },
     });
     expect(requestTranslations).toHaveBeenCalledOnce();
-    expect(requestTranslations.mock.calls[0]?.[0].segments).toHaveLength(2);
+    expect(requestTranslations.mock.calls[0]?.[0].segments).toHaveLength(3);
     expect(document.querySelector("#first a")).toBe(link);
     expect(
       document.querySelector("#first")?.nextElementSibling?.textContent,
@@ -111,8 +114,8 @@ describe("content controller workflow", () => {
       document.querySelector("#second")?.nextElementSibling?.textContent,
     ).toContain("Retry");
     expect(
-      document.querySelectorAll("pre [data-paralume-source-id]"),
-    ).toHaveLength(0);
+      document.querySelector("pre")?.nextElementSibling?.textContent,
+    ).toContain("Translation unavailable");
   });
 
   it("makes repeated translate and repeated injection/controller creation idempotent", async () => {
@@ -445,7 +448,7 @@ describe("content controller workflow", () => {
     const translating = controller.handleMessage(
       createContentCommand("translate"),
     );
-    expect(requests.map((request) => request.segments.length)).toEqual([20, 1]);
+    expect(requests.map((request) => request.segments.length)).toEqual([4, 17]);
     expect(new Set(operationIds).size).toBe(2);
     const fastSegment = requests[1]?.segments[0];
     if (fastSegment === undefined) {
@@ -462,7 +465,7 @@ describe("content controller workflow", () => {
     );
     await vi.waitFor(() => {
       expect(
-        document.querySelector("#batch-20")?.nextElementSibling?.textContent,
+        document.querySelector("#batch-4")?.nextElementSibling?.textContent,
       ).toBe("Fast batch translation");
     });
     expect(
@@ -484,6 +487,91 @@ describe("content controller workflow", () => {
       ok: true,
       state: { translationCount: 21 },
     });
+  });
+
+  it("uses a small first-response batch before larger follow-up batches", async () => {
+    document.body.replaceChildren(
+      ...Array.from({ length: 15 }, (_, index) => {
+        const paragraph = document.createElement("p");
+        paragraph.textContent = `Readable latency paragraph number ${String(index)}.`;
+        return paragraph;
+      }),
+    );
+    const requests: TranslationRequest[] = [];
+    const pending = [deferred<unknown>(), deferred<unknown>()];
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "first-response-batch" }),
+      requestTranslations(request) {
+        requests.push(request);
+        return (
+          pending[requests.length - 1]?.promise ??
+          Promise.reject(new Error("Unexpected batch"))
+        );
+      },
+    });
+
+    const translating = controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    expect(requests.map(({ segments }) => segments.length)).toEqual([4, 11]);
+    pending[0]?.resolve(
+      successResponse(
+        requests[0]?.segments.map((segment) => ({
+          id: segment.id,
+          status: "success" as const,
+          translatedText: `Fast ${segment.text}`,
+        })) ?? [],
+      ),
+    );
+    await vi.waitFor(() => {
+      expect(
+        document.querySelectorAll(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
+      ).toHaveLength(4);
+    });
+
+    pending[1]?.resolve(
+      successResponse(
+        requests[1]?.segments.map((segment) => ({
+          id: segment.id,
+          status: "success" as const,
+          translatedText: `Later ${segment.text}`,
+        })) ?? [],
+      ),
+    );
+    await expect(translating).resolves.toMatchObject({
+      ok: true,
+      state: { translationCount: 15 },
+    });
+  });
+
+  it("reports translating and complete progress around rendered batches", async () => {
+    document.body.innerHTML = `<p>Readable paragraph for progress reporting.</p>`;
+    const progress = vi.fn<(value: TranslationProgress) => void>();
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "progress-reporting" }),
+      onProgress: progress,
+      requestTranslations(request) {
+        return Promise.resolve(
+          successResponse(
+            request.segments.map((segment) => ({
+              id: segment.id,
+              status: "success" as const,
+              translatedText: "Progress translation",
+            })),
+          ),
+        );
+      },
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+
+    expect(progress.mock.calls.map(([value]) => value)).toEqual([
+      { phase: "translating", completed: 0, total: 1 },
+      { phase: "translating", completed: 1, total: 1 },
+      { phase: "complete", completed: 1, total: 1 },
+    ]);
   });
 
   it("clear invalidates pending work and stale results cannot reappear", async () => {

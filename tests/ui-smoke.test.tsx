@@ -78,6 +78,31 @@ afterEach(() => {
 });
 
 describe("localized Popup", () => {
+  it("starts translation when the toolbar popup opens", async () => {
+    const runCommand = vi.fn(() =>
+      Promise.resolve<ContentResponse>({
+        protocolVersion: 1,
+        ok: true,
+        state: { translationCount: 1, failureCount: 0, visible: true },
+        message: {
+          id: "content.translationSummary",
+          values: { succeeded: 1, failed: 0 },
+        },
+      }),
+    );
+    render(
+      <PopupApp
+        runCommand={runCommand}
+        loadContentSettings={() => Promise.resolve(contentSettings())}
+      />,
+    );
+
+    await flushEffects();
+    await flushEffects();
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(runCommand).toHaveBeenCalledWith("translate");
+  });
+
   it("runs accessible English actions and formats stable status identifiers", async () => {
     const runCommand = vi.fn(
       (command: "translate" | "toggle" | "clear"): Promise<ContentResponse> =>
@@ -102,6 +127,7 @@ describe("localized Popup", () => {
     );
     const popup = render(
       <PopupApp
+        autoStart={false}
         runCommand={runCommand}
         loadContentSettings={() => Promise.resolve(contentSettings())}
         getBrowserUiLanguage={() => "en-US"}
@@ -140,6 +166,7 @@ describe("localized Popup", () => {
   it("renders Simplified Chinese controls and fixed errors from the configured locale", async () => {
     const popup = render(
       <PopupApp
+        autoStart={false}
         loadContentSettings={() =>
           Promise.resolve(contentSettings({ uiLanguage: "zh-CN" }))
         }
@@ -177,6 +204,7 @@ describe("localized Popup", () => {
     let rejectCommand: ((error: Error) => void) | undefined;
     const popup = render(
       <PopupApp
+        autoStart={false}
         loadContentSettings={() => Promise.resolve(contentSettings())}
         getBrowserUiLanguage={() => "en-US"}
         runCommand={() =>

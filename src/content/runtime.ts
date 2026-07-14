@@ -1,6 +1,7 @@
 import {
   createBackgroundCancelTranslationMessage,
   createBackgroundTranslationMessage,
+  createContentCommand,
 } from "../messaging/protocol";
 import {
   createGetContentSettingsMessage,
@@ -9,7 +10,12 @@ import {
 import { parseCancelTranslationResponse } from "../messaging/validation";
 import { UserFacingError } from "../shared/errors";
 import type { TranslationRequest } from "../shared/types";
-import { createContentController, type ContentController } from "./controller";
+import {
+  createContentController,
+  type ContentController,
+  type TranslationProgress,
+} from "./controller";
+import { installFloatingMenu } from "./floating-menu";
 import { createContentRuntimeState, type ContentRuntimeState } from "./state";
 
 const CONTENT_RUNTIME_KEY = "__PARALUME_CONTENT_RUNTIME_V2__";
@@ -57,6 +63,8 @@ export function installContentRuntime(
   }
 
   const state = createContentRuntimeState();
+  let updateProgress: (progress: TranslationProgress) => void = () => undefined;
+  let updateLocale: (locale: "en" | "zh-CN") => void = () => undefined;
   const controller = createContentController({
     document: dependencies.document,
     state,
@@ -90,12 +98,36 @@ export function installContentRuntime(
       if (!parsed.value.ok) {
         throw new UserFacingError(parsed.value.error.code);
       }
+      const requested = parsed.value.contentSettings.uiLanguage;
+      const browserLanguage = dependencies.getBrowserUiLanguage?.();
+      updateLocale(
+        requested === "zh-CN" ||
+          (requested === "system" && browserLanguage?.startsWith("zh"))
+          ? "zh-CN"
+          : "en",
+      );
       return parsed.value.contentSettings;
+    },
+    onProgress(progress) {
+      updateProgress(progress);
     },
     ...(dependencies.getBrowserUiLanguage === undefined
       ? {}
       : { browserUiLanguage: dependencies.getBrowserUiLanguage }),
   });
+
+  const menu = installFloatingMenu(
+    dependencies.document,
+    (command) => controller.handleMessage(createContentCommand(command)),
+    "en",
+  );
+  state.ownedNodes.add(menu.host);
+  updateProgress = (progress) => {
+    menu.setProgress(progress);
+  };
+  updateLocale = (locale) => {
+    menu.setLocale(locale);
+  };
 
   dependencies.runtime.onMessage.addListener((message) =>
     controller.handleMessage(message),

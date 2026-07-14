@@ -14,6 +14,15 @@ function isStructuralContainer(element: HTMLElement): boolean {
   return ["LI", "TD", "TH"].includes(element.tagName);
 }
 
+function readingPriority(element: HTMLElement): number {
+  const rect = element.getBoundingClientRect();
+  const viewportHeight = element.ownerDocument.defaultView?.innerHeight ?? 0;
+  if (rect.bottom >= 0 && rect.top <= viewportHeight) {
+    return 0;
+  }
+  return rect.top > viewportHeight ? 1 : 2;
+}
+
 function hasStructuralAncestor(
   element: HTMLElement,
   structuralCandidates: ReadonlySet<HTMLElement>,
@@ -60,29 +69,46 @@ export function extractSegments(
     root.querySelectorAll(CANDIDATE_BLOCK_SELECTOR),
   ).filter((element) => isEligibleCandidate(element, state));
   const structuralCandidates = new Set(eligible.filter(isStructuralContainer));
+  const eligibleSet = new Set(eligible);
+  const candidatesWithEligibleDescendants = new Set<HTMLElement>();
+  for (const candidate of eligible) {
+    for (
+      let ancestor = candidate.parentElement;
+      ancestor !== null;
+      ancestor = ancestor.parentElement
+    ) {
+      if (eligibleSet.has(ancestor)) {
+        candidatesWithEligibleDescendants.add(ancestor);
+      }
+    }
+  }
   const selected = eligible.filter((candidate) => {
     if (hasStructuralAncestor(candidate, structuralCandidates)) {
       return false;
     }
 
-    if (isStructuralContainer(candidate)) {
-      return true;
-    }
-
-    return !eligible.some(
-      (other) => other !== candidate && candidate.contains(other),
+    return (
+      isStructuralContainer(candidate) ||
+      !candidatesWithEligibleDescendants.has(candidate)
     );
   });
 
-  return selected.map((element): ExtractedSegment => {
-    const text = getReadableText(element);
+  return selected
+    .map((element, index) => ({ element, index }))
+    .sort(
+      (first, second) =>
+        readingPriority(first.element) - readingPriority(second.element) ||
+        first.index - second.index,
+    )
+    .map(({ element }): ExtractedSegment => {
+      const text = getReadableText(element);
 
-    return {
-      element,
-      segment: {
-        id: getStableId(element, state),
-        text,
-      },
-    };
-  });
+      return {
+        element,
+        segment: {
+          id: getStableId(element, state),
+          text,
+        },
+      };
+    });
 }

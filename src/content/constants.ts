@@ -7,6 +7,6 @@ export const PARALUME_TRANSLATION_STATUS_ATTRIBUTE =
 export const PARALUME_RETRY_ATTRIBUTE = "data-paralume-retry";
 
 export const CANDIDATE_BLOCK_SELECTOR =
-  "p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th, figcaption";
+  "p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, td, th, figcaption";
 
 export const MIN_MEANINGFUL_CHARACTERS = 8;

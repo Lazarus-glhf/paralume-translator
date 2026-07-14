@@ -115,16 +115,90 @@ function disposeRetryControl(
   state.retryControls.delete(translation);
 }
 
+const LEGACY_DEFAULT_APPEARANCE = {
+  textColor: "#456257",
+  backgroundColor: "#f4f8f5",
+  lineHeight: 1.6,
+  verticalSpacing: 8,
+} as const;
+
+function isDefaultValue<T>(
+  value: T,
+  currentDefault: T,
+  legacyDefault?: T,
+): boolean {
+  return value === currentDefault || value === legacyDefault;
+}
+
+function applySourceTypography(
+  translation: HTMLElement,
+  source: HTMLElement,
+): void {
+  const style = source.ownerDocument.defaultView?.getComputedStyle(source);
+  if (style === undefined) {
+    return;
+  }
+  translation.style.fontFamily = style.fontFamily;
+  translation.style.fontSize = style.fontSize;
+  translation.style.fontWeight = style.fontWeight;
+  translation.style.fontStyle = style.fontStyle;
+  translation.style.lineHeight = style.lineHeight;
+  translation.style.letterSpacing = style.letterSpacing;
+  translation.style.textAlign = style.textAlign;
+  translation.style.textTransform = style.textTransform;
+  translation.style.textDecoration = style.textDecoration;
+  translation.style.wordSpacing = style.wordSpacing;
+  translation.style.direction = style.direction;
+  translation.style.tabSize = style.tabSize;
+  translation.style.color = style.color;
+  translation.style.backgroundColor = style.backgroundColor;
+  translation.style.opacity = style.opacity;
+  translation.style.whiteSpace =
+    source.tagName === "PRE" ? "pre-wrap" : "normal";
+}
+
 function applyAppearance(
   translation: HTMLElement,
+  source: HTMLElement,
   appearance: AppearanceSettings,
 ): void {
-  translation.style.fontFamily = FONT_FAMILIES[appearance.fontFamily];
-  translation.style.fontSize = `${String(appearance.fontSize)}px`;
-  translation.style.color = appearance.textColor;
-  translation.style.backgroundColor = appearance.backgroundColor;
-  translation.style.lineHeight = String(appearance.lineHeight);
-  translation.style.opacity = String(appearance.opacity);
+  applySourceTypography(translation, source);
+  if (appearance.fontFamily !== DEFAULT_APPEARANCE_SETTINGS.fontFamily) {
+    translation.style.fontFamily = FONT_FAMILIES[appearance.fontFamily];
+  }
+  if (appearance.fontSize !== DEFAULT_APPEARANCE_SETTINGS.fontSize) {
+    translation.style.fontSize = `${String(appearance.fontSize)}px`;
+  }
+  if (
+    !isDefaultValue(
+      appearance.lineHeight,
+      DEFAULT_APPEARANCE_SETTINGS.lineHeight,
+      LEGACY_DEFAULT_APPEARANCE.lineHeight,
+    )
+  ) {
+    translation.style.lineHeight = String(appearance.lineHeight);
+  }
+  if (
+    !isDefaultValue(
+      appearance.textColor,
+      DEFAULT_APPEARANCE_SETTINGS.textColor,
+      LEGACY_DEFAULT_APPEARANCE.textColor,
+    )
+  ) {
+    translation.style.color = appearance.textColor;
+  }
+  if (
+    !isDefaultValue(
+      appearance.backgroundColor,
+      DEFAULT_APPEARANCE_SETTINGS.backgroundColor,
+      LEGACY_DEFAULT_APPEARANCE.backgroundColor,
+    )
+  ) {
+    translation.style.backgroundColor = appearance.backgroundColor;
+  }
+  if (appearance.opacity !== DEFAULT_APPEARANCE_SETTINGS.opacity) {
+    translation.style.opacity = String(appearance.opacity);
+  }
   translation.style.marginBlock = `${String(appearance.verticalSpacing)}px`;
 }
 
@@ -205,6 +279,7 @@ export function renderTranslation(
     state.ownedNodes.add(translation);
     state.translations.add(translation);
     state.translationsBySource.set(source, translation);
+    state.sourcesByTranslation.set(translation, source);
   }
 
   disposeRetryControl(translation, state);
@@ -222,6 +297,7 @@ export function renderTranslation(
   translation.lang = result.status === "success" ? "zh-CN" : locale;
   applyAppearance(
     translation,
+    source,
     options.appearance ?? DEFAULT_APPEARANCE_SETTINGS,
   );
   translation.removeAttribute("aria-busy");
@@ -264,7 +340,10 @@ export function applyAppearanceToTranslations(
   appearance: AppearanceSettings,
 ): void {
   for (const translation of getTranslationElements(root, state)) {
-    applyAppearance(translation, appearance);
+    const source = state.sourcesByTranslation.get(translation);
+    if (source !== undefined) {
+      applyAppearance(translation, source, appearance);
+    }
   }
 }
 
