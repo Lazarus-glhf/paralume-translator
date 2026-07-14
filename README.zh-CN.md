@@ -7,9 +7,8 @@ Paralume（并译）是一款面向 Chrome 和 Edge 的本地优先双语网页�
 批处理，并把译文放在对应原文旁边。它不会重写网页的 `innerHTML`，不会替换
 原始链接、事件监听器或框架拥有的节点，服务返回内容始终作为纯文本插入。
 
-当前版本目标为 Alpha `0.0.2`，面向测试者反馈。此版本支持显式选择 Mock、
-OpenAI 兼容服务或 Microsoft Translator，并新增可恢复错误自动重试、逐段手动
-重试、仅作用于 Paralume 界面的外观设置，以及简体中文/英语界面。Paralume
+当前版本目标为 Alpha `0.0.3`，面向测试者反馈。此版本新增渐进式、视口优先
+翻译，更快的多批次渲染、页内悬浮控制和贴合原文的译文样式。Paralume
 绝不会在真实服务失败后自动回退到 Mock。
 
 ## 从 GitHub Releases 安装测试版
@@ -18,8 +17,8 @@ OpenAI 兼容服务或 Microsoft Translator，并新增可恢复错误自动重�
    [GitHub Releases](https://github.com/Lazarus-glhf/paralume-translator/releases)
    页面，选择需要测试的预发布版本。
 2. 下载对应浏览器的 ZIP，例如
-   `paralume-translator-0.0.2-chrome.zip` 或
-   `paralume-translator-0.0.2-edge.zip`，同时下载配套的
+   `paralume-translator-0.0.3-chrome.zip` 或
+   `paralume-translator-0.0.3-edge.zip`，同时下载配套的
    `SHA256SUMS.txt`。
 3. 根据校验文件验证 ZIP 的 SHA-256。Linux 可使用 `sha256sum <zip>`，macOS
    可使用 `shasum -a 256 <zip>`，PowerShell 可使用
@@ -266,8 +265,8 @@ Playwright 测试。测试不使用真实服务密钥：
 
 ## 版本与预发布打包
 
-`package.json` 是唯一版本来源。当前目标为数字版本 `0.0.2`，尚未在本实现中
-创建标签或发布。WXT 从该值生成 Chrome/Edge 清单版本。
+`package.json` 是唯一版本来源。当前目标为数字版本 `0.0.3`。WXT 从该值生成
+Chrome/Edge 清单版本。
 
 本地模拟打包：
 

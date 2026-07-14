@@ -1,6 +1,6 @@
 {
   "name": "paralume-translator",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "description": "A local-first bilingual webpage translator for Chrome and Edge.",
   "type": "module",

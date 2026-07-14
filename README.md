@@ -7,9 +7,9 @@ Edge. It extracts readable page blocks, sends validated requests to the
 background service worker, batches provider work, and places each translation
 directly with its original block.
 
-Alpha `0.0.2` adds bounded transient-failure retries, per-segment manual Retry
-controls, appearance settings limited to Paralume-owned UI, and Simplified
-Chinese/English interfaces. Selectable OpenAI-compatible and Microsoft
+Alpha `0.0.3` adds progressive, viewport-prioritized translation, faster
+multi-batch rendering, a floating in-page control, and source-aware translation
+styling. Selectable OpenAI-compatible and Microsoft
 Translator BYOK providers remain available. The deterministic Mock provider is
 used only when explicitly selected for development; Paralume never falls back
 to Mock after a real-provider configuration or request failure.
@@ -25,8 +25,8 @@ automated or part of the current release workflow.
    [GitHub Releases](https://github.com/Lazarus-glhf/paralume-translator/releases)
    page and select the intended prerelease.
 2. Download the ZIP for your browser, named like
-   `paralume-translator-0.0.2-chrome.zip` or
-   `paralume-translator-0.0.2-edge.zip`, plus the matching
+   `paralume-translator-0.0.3-chrome.zip` or
+   `paralume-translator-0.0.3-edge.zip`, plus the matching
    `SHA256SUMS.txt` file.
 3. Verify the ZIP's SHA-256 digest against its line in the checksum file. For
    example, use `sha256sum <zip>` on Linux, `shasum -a 256 <zip>` on macOS,
@@ -316,9 +316,9 @@ WXT writes unpacked builds beneath `.output/chrome-mv3` and
 ## Prerelease packaging and versioning
 
 `package.json` is the single release-version source. It uses canonical numeric
-SemVer such as `0.0.2`, which is also valid as a Chromium manifest version. The
-current Alpha target is `0.0.2`; a future reviewed prerelease would use tag
-`v0.0.2`, while the future first stable release will use `0.1.0`. WXT derives
+SemVer such as `0.0.3`, which is also valid as a Chromium manifest version. The
+current Alpha target is `0.0.3`; a reviewed prerelease uses tag
+`v0.0.3`, while the future first stable release will use `0.1.0`. WXT derives
 both generated Chrome and Edge manifest versions
 from that value; do not add a duplicate hard-coded version to `wxt.config.ts`.
 
@@ -336,7 +336,7 @@ SHA-256 checksum file beneath `release-assets/`.
 
 For a tag-driven prerelease, update only the `package.json` version and lockfile
 if needed, complete review and verification on `main`, then create the exact
-matching tag `v<package-version>` (for example, `v0.0.2`). Pushing that tag runs
+matching tag `v<package-version>` (for example, `v0.0.3`). Pushing that tag runs
 the release gate and creates an Alpha GitHub prerelease. A mismatched,
 non-canonical, or placeholder version fails before packaging.
 
