@@ -164,6 +164,7 @@ export function createContentController(
     dependencies.progressiveBatchLimits ?? DEFAULT_BATCH_LIMITS;
   let operationGeneration = 0;
   let activeTranslation: ActiveTranslation | undefined;
+  let activeBulkRetry: ActiveTranslation | undefined;
   let activeSettingsRefresh: ActiveSettingsRefresh | undefined;
   let settings = defaultContentSettings();
   let locale: UiLocale = resolveUiLocale(
@@ -424,10 +425,6 @@ export function createContentController(
       }
 
       const batches: ExtractedSegment[][] = [];
-      const firstBatch = extracted.slice(0, 8);
-      if (firstBatch.length > 0) {
-        batches.push(firstBatch);
-      }
       let currentBatch: ExtractedSegment[] = [];
       let currentCharacters = 0;
       const flushBatch = (): void => {
@@ -437,7 +434,7 @@ export function createContentController(
           currentCharacters = 0;
         }
       };
-      for (const item of extracted.slice(firstBatch.length)) {
+      for (const item of extracted) {
         if (
           currentBatch.length >= progressiveBatchLimits.maxSegments ||
           currentCharacters + item.segment.text.length >
@@ -644,6 +641,100 @@ export function createContentController(
     return promise;
   };
 
+  const retryFailed = (): Promise<ContentResponse> => {
+    if (activeBulkRetry?.generation === operationGeneration) {
+      return activeBulkRetry.promise;
+    }
+    const failed: ExtractedSegment[] = [];
+    for (const translation of dependencies.state.translations) {
+      if (
+        dependencies.state.translationStatuses.get(translation) !== "failure"
+      ) {
+        continue;
+      }
+      const element = dependencies.state.sourcesByTranslation.get(translation);
+      const marker = element && dependencies.state.sourceMarkers.get(element);
+      if (
+        element === undefined ||
+        marker === undefined ||
+        !element.isConnected ||
+        getCurrentSourceText(element, dependencies.state) !== marker.sourceText
+      ) {
+        continue;
+      }
+      failed.push({
+        element,
+        segment: { id: marker.segmentId, text: marker.sourceText },
+      });
+    }
+    if (failed.length === 0) {
+      return Promise.resolve(
+        success(dependencies, createMessage("content.retryFailedEmpty")),
+      );
+    }
+
+    const generation = operationGeneration;
+    const operationId = nextOperationId();
+    const operationIds = new Set([operationId]);
+    streamingOperations.set(operationId, {
+      generation,
+      items: new Map(failed.map((item) => [item.segment.id, item])),
+    });
+    const promise = dependencies
+      .requestTranslations(
+        {
+          sourceLanguage: "auto",
+          targetLanguage: "zh-CN",
+          segments: failed.map((item) => item.segment),
+        },
+        operationId,
+      )
+      .then((rawResponse) => {
+        if (generation !== operationGeneration) return cancelled();
+        const parsed = parseTranslationResponse(rawResponse);
+        if (!parsed.ok) return createErrorResponse(parsed.error);
+        if (!parsed.value.ok) return parsed.value;
+        const byId = mapResultsById(
+          failed.map((item) => item.segment),
+          parsed.value.results,
+        );
+        const visible = getContentState(
+          dependencies.document,
+          dependencies.state,
+        ).visible;
+        for (const item of failed) {
+          const result = byId.get(item.segment.id);
+          if (result !== undefined) {
+            renderResult(item, result, visible, result.status === "failure");
+          }
+        }
+        dependencies.onProgress?.({
+          phase: "complete",
+          completed: failed.length,
+          total: failed.length,
+        });
+        return success(
+          dependencies,
+          createMessage("content.retryFailedComplete", {
+            count: failed.length,
+          }),
+        );
+      })
+      .catch((error: unknown) =>
+        createErrorResponse(sanitizeError(error, "TRANSLATION_FAILED")),
+      )
+      .finally(() => {
+        operationIds.delete(operationId);
+        streamingOperations.delete(operationId);
+      });
+    const operation: ActiveTranslation = { generation, operationIds, promise };
+    activeBulkRetry = operation;
+    void promise.finally(() => {
+      if (activeBulkRetry === operation) activeBulkRetry = undefined;
+    });
+    return promise;
+  };
+
   const toggle = (): ContentResponse => {
     const state = getContentState(dependencies.document, dependencies.state);
     if (state.translationCount === 0) {
@@ -665,6 +756,11 @@ export function createContentController(
         operationIds.add(operationId);
       }
     }
+    if (activeBulkRetry !== undefined) {
+      for (const operationId of activeBulkRetry.operationIds) {
+        operationIds.add(operationId);
+      }
+    }
     for (const retry of manualRetries.values()) {
       operationIds.add(retry.operationId);
     }
@@ -672,6 +768,7 @@ export function createContentController(
     operationGeneration += 1;
     streamingOperations.clear();
     activeTranslation = undefined;
+    activeBulkRetry = undefined;
     activeSettingsRefresh = undefined;
     manualRetries.clear();
     for (const operationId of operationIds) {
@@ -709,6 +806,8 @@ export function createContentController(
       switch (parsed.value.command) {
         case "translate":
           return translate();
+        case "retry-failed":
+          return retryFailed();
         case "toggle":
           return Promise.resolve(toggle());
         case "clear":

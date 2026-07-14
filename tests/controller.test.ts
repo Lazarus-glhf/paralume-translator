@@ -420,7 +420,7 @@ describe("content controller workflow", () => {
     );
   });
 
-  it("renders completed page batches without waiting for slower batches", async () => {
+  it("uses one request for the full page to minimize RPM", async () => {
     document.body.replaceChildren(
       ...Array.from({ length: 21 }, (_, index) => {
         const paragraph = document.createElement("p");
@@ -448,32 +448,8 @@ describe("content controller workflow", () => {
     const translating = controller.handleMessage(
       createContentCommand("translate"),
     );
-    expect(requests.map((request) => request.segments.length)).toEqual([8, 13]);
-    expect(new Set(operationIds).size).toBe(2);
-    const fastSegment = requests[1]?.segments[0];
-    if (fastSegment === undefined) {
-      throw new Error("Progressive batch fixture was not captured.");
-    }
-    pending[1]?.resolve(
-      successResponse([
-        {
-          id: fastSegment.id,
-          status: "success",
-          translatedText: "Fast batch translation",
-        },
-      ]),
-    );
-    await vi.waitFor(() => {
-      expect(
-        document.querySelector("#batch-8")?.nextElementSibling?.textContent,
-      ).toBe("Fast batch translation");
-    });
-    expect(
-      document.querySelector(
-        `#batch-0 + [${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`,
-      ),
-    ).toBeNull();
-
+    expect(requests.map((request) => request.segments.length)).toEqual([21]);
+    expect(new Set(operationIds).size).toBe(1);
     pending[0]?.resolve(
       successResponse(
         requests[0]?.segments.map((segment) => ({
@@ -489,7 +465,7 @@ describe("content controller workflow", () => {
     });
   });
 
-  it("uses a small first-response batch before larger follow-up batches", async () => {
+  it("keeps a medium page in one request", async () => {
     document.body.replaceChildren(
       ...Array.from({ length: 15 }, (_, index) => {
         const paragraph = document.createElement("p");
@@ -514,7 +490,7 @@ describe("content controller workflow", () => {
     const translating = controller.handleMessage(
       createContentCommand("translate"),
     );
-    expect(requests.map(({ segments }) => segments.length)).toEqual([8, 7]);
+    expect(requests.map(({ segments }) => segments.length)).toEqual([15]);
     pending[0]?.resolve(
       successResponse(
         requests[0]?.segments.map((segment) => ({
@@ -527,18 +503,9 @@ describe("content controller workflow", () => {
     await vi.waitFor(() => {
       expect(
         document.querySelectorAll(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
-      ).toHaveLength(8);
+      ).toHaveLength(15);
     });
 
-    pending[1]?.resolve(
-      successResponse(
-        requests[1]?.segments.map((segment) => ({
-          id: segment.id,
-          status: "success" as const,
-          translatedText: `Later ${segment.text}`,
-        })) ?? [],
-      ),
-    );
     await expect(translating).resolves.toMatchObject({
       ok: true,
       state: { translationCount: 15 },
@@ -893,6 +860,48 @@ describe("content controller workflow", () => {
     expect(requests[1]?.segments.map(({ text }) => text)).toEqual([
       "Third readable budget paragraph",
     ]);
+  });
+
+  it("retries all failed segments in one request", async () => {
+    document.body.innerHTML = `<p>First failed block.</p><p>Second failed block.</p>`;
+    const requests: TranslationRequest[] = [];
+    let call = 0;
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "bulk-retry" }),
+      requestTranslations: (request) => {
+        requests.push(request);
+        call += 1;
+        return Promise.resolve(
+          successResponse(
+            request.segments.map((segment): TranslationResult =>
+              call === 1
+                ? {
+                    id: segment.id,
+                    status: "failure" as const,
+                    error: createError("AUTHENTICATION_FAILED"),
+                  }
+                : {
+                    id: segment.id,
+                    status: "success" as const,
+                    translatedText: `Retried ${segment.text}`,
+                  },
+            ),
+          ),
+        );
+      },
+    });
+    await controller.handleMessage(createContentCommand("translate"));
+    const retried = controller.handleMessage(
+      createContentCommand("retry-failed"),
+    );
+    const repeated = controller.handleMessage(
+      createContentCommand("retry-failed"),
+    );
+    await Promise.all([retried, repeated]);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.segments).toHaveLength(2);
+    expect(document.body.textContent).toContain("Retried First failed block.");
   });
 
   it("manually retries only one failed segment, deduplicates clicks, and replaces it in place", async () => {

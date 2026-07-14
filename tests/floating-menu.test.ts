@@ -9,7 +9,9 @@ afterEach(() => {
 describe("page floating menu", () => {
   it("uses isolated Shadow DOM and makes the dock button translate by default", () => {
     const runCommand = vi.fn<
-      (command: "translate" | "toggle" | "clear") => Promise<void>
+      (
+        command: "translate" | "retry-failed" | "toggle" | "clear",
+      ) => Promise<void>
     >(() => Promise.resolve());
     const menu = installFloatingMenu(document, runCommand, "en");
 
@@ -23,7 +25,9 @@ describe("page floating menu", () => {
 
   it("shows working progress and exposes expanded visibility and clear actions", () => {
     const runCommand = vi.fn<
-      (command: "translate" | "toggle" | "clear") => Promise<void>
+      (
+        command: "translate" | "retry-failed" | "toggle" | "clear",
+      ) => Promise<void>
     >(() => Promise.resolve());
     const menu = installFloatingMenu(document, runCommand, "zh-CN");
     menu.setProgress({ phase: "translating", completed: 4, total: 15 });
@@ -36,9 +40,14 @@ describe("page floating menu", () => {
     expect(shadow?.querySelector("[data-panel]")?.hasAttribute("hidden")).toBe(
       false,
     );
+    menu.setFailureCount(2);
+    shadow
+      ?.querySelector<HTMLButtonElement>('[data-action="retry-failed"]')
+      ?.click();
     shadow?.querySelector<HTMLButtonElement>('[data-action="toggle"]')?.click();
     shadow?.querySelector<HTMLButtonElement>('[data-action="clear"]')?.click();
     expect(runCommand.mock.calls.map(([command]) => command)).toEqual([
+      "retry-failed",
       "toggle",
       "clear",
     ]);

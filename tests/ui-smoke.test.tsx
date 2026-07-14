@@ -105,7 +105,9 @@ describe("localized Popup", () => {
 
   it("runs accessible English actions and formats stable status identifiers", async () => {
     const runCommand = vi.fn(
-      (command: "translate" | "toggle" | "clear"): Promise<ContentResponse> =>
+      (
+        command: "translate" | "retry-failed" | "toggle" | "clear",
+      ): Promise<ContentResponse> =>
         Promise.resolve({
           protocolVersion: 1,
           ok: true,
@@ -389,7 +391,7 @@ describe("localized Options", () => {
 
     const submitted = vi.mocked(client.save).mock.calls[0];
     expect(submitted?.[0].uiLanguage).toBe("zh-CN");
-    expect(submitted?.[0].retry).toEqual({ enabled: true, maxRetries: 2 });
+    expect(submitted?.[0].retry).toEqual({ enabled: false, maxRetries: 0 });
     expect(submitted?.[0].appearance.fontSize).toBe(22);
     expect(submitted?.[1]).toEqual({
       openaiApiKey: "replacement-test-key",

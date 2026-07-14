@@ -6,6 +6,7 @@ export interface FloatingMenu {
   readonly host: HTMLElement;
   setLocale(locale: UiLocale): void;
   setProgress(progress: TranslationProgress): void;
+  setFailureCount(count: number): void;
 }
 
 const labels = {
@@ -14,6 +15,7 @@ const labels = {
     expand: "More translation controls",
     toggle: "Show or hide translations",
     clear: "Clear translations",
+    retryFailed: "Retry all failed",
     ready: "Ready",
     translating: "Translating",
     complete: "Translation complete",
@@ -24,6 +26,7 @@ const labels = {
     expand: "更多翻译控制",
     toggle: "显示或隐藏译文",
     clear: "清除译文",
+    retryFailed: "批量重试失败项",
     ready: "准备就绪",
     translating: "正在翻译",
     complete: "翻译完成",
@@ -69,7 +72,8 @@ export function installFloatingMenu(
       <button data-action="expand" type="button" aria-label="${text.expand}" aria-expanded="false">•••</button>
       <div class="panel" data-panel hidden>
         <p class="status" role="status">${text.ready}</p>
-        <div class="row">
+      <div class="row">
+          <button data-action="retry-failed" type="button" disabled>${text.retryFailed}</button>
           <button data-action="toggle" type="button">${text.toggle}</button>
           <button class="danger" data-action="clear" type="button">${text.clear}</button>
         </div>
@@ -88,6 +92,11 @@ export function installFloatingMenu(
     .querySelector('[data-action="primary"]')
     ?.addEventListener("click", () => {
       invoke("translate");
+    });
+  shadow
+    .querySelector('[data-action="retry-failed"]')
+    ?.addEventListener("click", () => {
+      invoke("retry-failed");
     });
   shadow
     .querySelector('[data-action="toggle"]')
@@ -142,6 +151,12 @@ export function installFloatingMenu(
     if (toggleButton !== null) {
       toggleButton.textContent = activeLabels.toggle;
     }
+    const retryFailedButton = shadow.querySelector<HTMLButtonElement>(
+      '[data-action="retry-failed"]',
+    );
+    if (retryFailedButton !== null) {
+      retryFailedButton.textContent = activeLabels.retryFailed;
+    }
     const clearButton = shadow.querySelector<HTMLButtonElement>(
       '[data-action="clear"]',
     );
@@ -163,6 +178,15 @@ export function installFloatingMenu(
         "data-working",
         String(progress.phase === "translating"),
       );
+    },
+    setFailureCount(count) {
+      const button = shadow.querySelector<HTMLButtonElement>(
+        '[data-action="retry-failed"]',
+      );
+      if (button !== null) {
+        button.disabled = count === 0;
+        button.hidden = count === 0;
+      }
     },
   };
 }

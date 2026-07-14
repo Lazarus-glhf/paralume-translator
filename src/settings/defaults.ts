@@ -6,8 +6,8 @@ import {
 } from "./types";
 
 export const DEFAULT_RETRY_SETTINGS: RetrySettings = {
-  enabled: true,
-  maxRetries: 2,
+  enabled: false,
+  maxRetries: 0,
 };
 
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {

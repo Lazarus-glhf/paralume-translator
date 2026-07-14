@@ -19,6 +19,8 @@ const EN_MESSAGES = {
     "No readable blocks fit within the per-page request limit; {omitted} were skipped.",
   "content.omitted":
     "{count} additional readable blocks were skipped by the per-page request limit.",
+  "content.retryFailedEmpty": "There are no failed translations to retry.",
+  "content.retryFailedComplete": "Retried {count} failed translations.",
   "content.retry": "Retry",
   "content.retryAccessible": "Retry translation for this readable block",
   "content.retryPending": "Retrying…",
@@ -133,6 +135,8 @@ const ZH_CN_MESSAGES: Record<MessageId, string> = {
   "content.noFitOmitted":
     "没有可读文本块能放入单页请求限制；已跳过 {omitted} 个。",
   "content.omitted": "另有 {count} 个可读文本块因单页请求限制而跳过。",
+  "content.retryFailedEmpty": "没有需要重试的失败译文。",
+  "content.retryFailedComplete": "已批量重试 {count} 个失败译文。",
   "content.retry": "重试",
   "content.retryAccessible": "重试此可读文本块的翻译",
   "content.retryPending": "正在重试…",

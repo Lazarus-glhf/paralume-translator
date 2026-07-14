@@ -19,6 +19,7 @@ import {
   type TranslationProgress,
 } from "./controller";
 import { installFloatingMenu } from "./floating-menu";
+import { getContentState } from "./renderer";
 import { createContentRuntimeState, type ContentRuntimeState } from "./state";
 
 const CONTENT_RUNTIME_KEY = "__PARALUME_CONTENT_RUNTIME_V2__";
@@ -67,6 +68,7 @@ export function installContentRuntime(
 
   const state = createContentRuntimeState();
   let updateProgress: (progress: TranslationProgress) => void = () => undefined;
+  let updateFailureCount: (count: number) => void = () => undefined;
   let updateLocale: (locale: "en" | "zh-CN") => void = () => undefined;
   const controller = createContentController({
     document: dependencies.document,
@@ -113,6 +115,9 @@ export function installContentRuntime(
     },
     onProgress(progress) {
       updateProgress(progress);
+      updateFailureCount(
+        getContentState(dependencies.document, state).failureCount,
+      );
     },
     ...(dependencies.getBrowserUiLanguage === undefined
       ? {}
@@ -127,6 +132,9 @@ export function installContentRuntime(
   state.ownedNodes.add(menu.host);
   updateProgress = (progress) => {
     menu.setProgress(progress);
+  };
+  updateFailureCount = (count) => {
+    menu.setFailureCount(count);
   };
   updateLocale = (locale) => {
     menu.setLocale(locale);
