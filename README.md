@@ -67,11 +67,15 @@ readable blocks intersecting the current viewport, sends a four-block first-resp
 batch, then uses provider-sized follow-up batches (up to 20 segments and 6,000 source
 characters) with at most three requests in flight. Each completed batch renders
 immediately instead of waiting for the slowest batch. Visible documentation code blocks
-(`pre`) are translated as one block; nested code spans are not duplicated. Every batch
-and manual retry has its own validated opaque UUID, and Clear cancels all active batch
-operations. Before rendering an async result, the content runtime verifies that its
-source remains in the current document and still matches the captured normalized text; changed or detached sources are skipped
-and remain eligible for a later Translate action. Original DOM nodes, inline links,
+(`pre`) are translated as one block; nested code spans are not duplicated. Semantic line
+breaks from `br` elements and preformatted text are preserved in provider input.
+Translated newlines, blank lines, and list markers render through inert `textContent`
+with `white-space: pre-wrap`; HTML source indentation is still collapsed and provider
+output is never interpreted as markup. Every batch and manual retry has its own validated
+opaque UUID, and Clear cancels all active batch operations. Before rendering an async
+result, the content runtime verifies that its source remains in the current document and
+still matches the captured normalized text; changed or detached sources are skipped and
+remain eligible for a later Translate action. Original DOM nodes, inline links,
 event listeners, and framework ownership are retained; provider output is inserted
 with `textContent`, never as executable HTML.
 

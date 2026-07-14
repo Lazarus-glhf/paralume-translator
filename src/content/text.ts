@@ -5,8 +5,33 @@ export function normalizeReadableText(text: string): string {
   return text.replace(/[\s\u00a0]+/gu, " ").trim();
 }
 
+function explicitLineBreakMarker(text: string): string {
+  let marker = "\uE000";
+  while (text.includes(marker)) {
+    marker += "\uE001";
+  }
+  return marker;
+}
+
+function normalizePreformattedText(text: string): string {
+  return text
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[\t\f\v\u00a0 ]+/gu, " ")
+    .replace(/ *\n */gu, "\n")
+    .trim();
+}
+
 export function getReadableText(element: HTMLElement): string {
-  return normalizeReadableText(element.innerText);
+  if (element.tagName === "PRE") {
+    return normalizePreformattedText(element.innerText);
+  }
+
+  const clone = element.cloneNode(true) as HTMLElement;
+  const marker = explicitLineBreakMarker(clone.innerText);
+  for (const lineBreak of clone.querySelectorAll("br")) {
+    lineBreak.replaceWith(marker);
+  }
+  return normalizeReadableText(clone.innerText).replaceAll(marker, "\n");
 }
 
 export function getCurrentSourceText(

@@ -34,6 +34,39 @@ describe("extractSegments", () => {
     );
   });
 
+  it("preserves explicit line breaks and blank lines inside a readable block", () => {
+    document.body.innerHTML = `
+      <p id="formatted">Resolve the customer's issue end to end.<br><br>Success means:<br>- make the eligibility decision from available policy and account evidence<br>- complete any allowed action before responding<br>- return completed_actions, customer_message, and blockers<br>- if required evidence is missing, ask for the smallest missing field</p>
+    `;
+
+    const extracted = extractSegments(
+      document,
+      createContentRuntimeState({ runtimeId: "line-breaks" }),
+    );
+
+    expect(extracted[0]?.segment.text).toBe(
+      "Resolve the customer's issue end to end.\n\nSuccess means:\n- make the eligibility decision from available policy and account evidence\n- complete any allowed action before responding\n- return completed_actions, customer_message, and blockers\n- if required evidence is missing, ask for the smallest missing field",
+    );
+  });
+
+  it("does not treat HTML source indentation as visible line breaks", () => {
+    document.body.innerHTML = `
+      <p id="indented">
+        Read the <a href="https://example.com/docs">complete documentation</a>
+        before configuring the extension.
+      </p>
+    `;
+
+    const extracted = extractSegments(
+      document,
+      createContentRuntimeState({ runtimeId: "source-indentation" }),
+    );
+
+    expect(extracted[0]?.segment.text).toBe(
+      "Read the complete documentation before configuring the extension.",
+    );
+  });
+
   it("supports the agreed block-level candidate set", () => {
     document.body.innerHTML = `
       <main>

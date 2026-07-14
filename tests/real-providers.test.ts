@@ -115,6 +115,9 @@ describe("OpenAI-compatible translation provider", () => {
     });
     expect(JSON.stringify(body)).toContain("segment-a");
     expect(JSON.stringify(body)).toContain("First readable paragraph.");
+    expect(JSON.stringify(body)).toContain(
+      "Preserve line breaks, blank lines, and list markers",
+    );
   });
 
   it("uses Chat Completions with the selected reasoning effort", async () => {

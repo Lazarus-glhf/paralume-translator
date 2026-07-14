@@ -68,8 +68,33 @@ describe("safe translation rendering", () => {
       extracted.segment.id,
     );
     expect(translation.style.padding).toBe("0.2em 0px 0.35em");
+
     expect(translation.style.borderInlineStart).toBe("0 solid transparent");
     expect(translation.style.transition).toContain("opacity");
+  });
+
+  it("renders translated line breaks and blank lines as inert text", () => {
+    document.body.innerHTML = `<p id="source">Readable source with explicit formatting.</p>`;
+    const state = createContentRuntimeState({ runtimeId: "translated-lines" });
+    const extracted = extractSegments(document, state)[0];
+    if (extracted === undefined) {
+      throw new Error("Formatted translation fixture was not extracted.");
+    }
+
+    const translation = renderTranslation(
+      extracted,
+      {
+        id: extracted.segment.id,
+        status: "success",
+        translatedText:
+          "端到端解决客户的问题。\n\n成功意味着：\n- 根据现有证据判断资格\n- 返回 completed_actions、customer_message 和 blockers",
+      },
+      state,
+    );
+
+    expect(translation.textContent).toContain("。\n\n成功意味着：\n-");
+    expect(translation.style.whiteSpace).toBe("pre-wrap");
+    expect(translation.querySelector("br")).toBeNull();
   });
 
   it("appends internal divs for list and table blocks without changing structure", () => {

@@ -430,11 +430,32 @@ test.describe("unpacked Chromium extension", () => {
     const sourceSnapshots = await articlePage
       .locator("[data-expect-translation]")
       .evaluateAll((sources) =>
-        sources.map((source) => ({
-          childElementCount: source.childElementCount,
-          structural: ["LI", "TD", "TH"].includes(source.tagName),
-          text: (source as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
-        })),
+        sources.map((source) => {
+          const element = source as HTMLElement;
+          if (element.tagName === "PRE") {
+            return {
+              childElementCount: element.childElementCount,
+              structural: false,
+              text: element.innerText
+                .replace(/\r\n?/g, "\n")
+                .replace(/[\t\f\v\u00a0 ]+/g, " ")
+                .replace(/ *\n */g, "\n")
+                .trim(),
+            };
+          }
+          const clone = element.cloneNode(true) as HTMLElement;
+          for (const lineBreak of clone.querySelectorAll("br")) {
+            lineBreak.replaceWith("\uE000");
+          }
+          return {
+            childElementCount: element.childElementCount,
+            structural: ["LI", "TD", "TH"].includes(element.tagName),
+            text: clone.innerText
+              .replace(/[\s\u00a0]+/g, " ")
+              .trim()
+              .replaceAll("\uE000", "\n"),
+          };
+        }),
       );
     const listItemCount = await articlePage.locator("ul > li").count();
     const tableCellCount = await articlePage
@@ -458,6 +479,13 @@ test.describe("unpacked Chromium extension", () => {
 
     await expect(articlePage.locator(translationSelector)).toHaveCount(
       expectedSourceCount,
+    );
+    const formattedTranslation = articlePage.locator(
+      `#formatted-guidance + ${translationSelector}`,
+    );
+    await expect(formattedTranslation).toHaveCSS("white-space", "pre-wrap");
+    await expect(formattedTranslation).toContainText(
+      "end to end.\n\nSuccess means:\n- make the eligibility decision",
     );
     const typographyPairs = await articlePage.evaluate(() =>
       ["article-title", "linked-paragraph", "preformatted-code"].map((id) => {
@@ -1106,6 +1134,7 @@ test.describe("unpacked Chromium extension", () => {
     await expect(
       optionsPage.locator('input[name="appearanceBackgroundColor"]'),
     ).toHaveValue("#ddeeff");
+
     await optionsPage.close();
 
     const retryPage = await context.newPage();

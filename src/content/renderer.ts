@@ -153,8 +153,7 @@ function applySourceTypography(
   translation.style.color = style.color;
   translation.style.backgroundColor = style.backgroundColor;
   translation.style.opacity = style.opacity;
-  translation.style.whiteSpace =
-    source.tagName === "PRE" ? "pre-wrap" : "normal";
+  translation.style.whiteSpace = "pre-wrap";
 }
 
 function applyAppearance(
