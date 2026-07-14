@@ -24,8 +24,8 @@ export interface BatchLimits {
 }
 
 export const DEFAULT_BATCH_LIMITS: BatchLimits = {
-  maxSegments: 200,
-  maxCharacters: 50_000,
+  maxSegments: 40,
+  maxCharacters: 12_000,
   concurrency: 1,
 };
 

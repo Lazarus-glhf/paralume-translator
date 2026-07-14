@@ -645,7 +645,8 @@ export function createContentController(
     if (activeBulkRetry?.generation === operationGeneration) {
       return activeBulkRetry.promise;
     }
-    const failed: ExtractedSegment[] = [];
+    const failed: (ExtractedSegment & { readonly translation: HTMLElement })[] =
+      [];
     for (const translation of dependencies.state.translations) {
       if (
         dependencies.state.translationStatuses.get(translation) !== "failure"
@@ -664,6 +665,7 @@ export function createContentController(
       }
       failed.push({
         element,
+        translation,
         segment: { id: marker.segmentId, text: marker.sourceText },
       });
     }
@@ -676,10 +678,6 @@ export function createContentController(
     const generation = operationGeneration;
     const operationId = nextOperationId();
     const operationIds = new Set([operationId]);
-    streamingOperations.set(operationId, {
-      generation,
-      items: new Map(failed.map((item) => [item.segment.id, item])),
-    });
     const promise = dependencies
       .requestTranslations(
         {
@@ -704,7 +702,17 @@ export function createContentController(
         ).visible;
         for (const item of failed) {
           const result = byId.get(item.segment.id);
-          if (result !== undefined) {
+          if (
+            result !== undefined &&
+            dependencies.state.translationsBySource.get(item.element) ===
+              item.translation &&
+            dependencies.state.translationStatuses.get(item.translation) ===
+              "failure" &&
+            dependencies.state.sourceMarkers.get(item.element)?.segmentId ===
+              item.segment.id &&
+            getCurrentSourceText(item.element, dependencies.state) ===
+              item.segment.text
+          ) {
             renderResult(item, result, visible, result.status === "failure");
           }
         }
@@ -725,7 +733,6 @@ export function createContentController(
       )
       .finally(() => {
         operationIds.delete(operationId);
-        streamingOperations.delete(operationId);
       });
     const operation: ActiveTranslation = { generation, operationIds, promise };
     activeBulkRetry = operation;
