@@ -7,7 +7,10 @@ import {
   createGetContentSettingsMessage,
   parseContentSettingsResponse,
 } from "../messaging/settings-protocol";
-import { parseCancelTranslationResponse } from "../messaging/validation";
+import {
+  parseCancelTranslationResponse,
+  parseTranslationResultMessage,
+} from "../messaging/validation";
 import { UserFacingError } from "../shared/errors";
 import type { TranslationRequest } from "../shared/types";
 import {
@@ -129,9 +132,17 @@ export function installContentRuntime(
     menu.setLocale(locale);
   };
 
-  dependencies.runtime.onMessage.addListener((message) =>
-    controller.handleMessage(message),
-  );
+  dependencies.runtime.onMessage.addListener((message) => {
+    const parsed = parseTranslationResultMessage(message);
+    if (parsed.ok) {
+      controller.handleStreamingResult(
+        parsed.value.operationId,
+        parsed.value.result,
+      );
+      return Promise.resolve(undefined);
+    }
+    return controller.handleMessage(message);
+  });
   dependencies.globalObject[CONTENT_RUNTIME_KEY] = {
     version: 2,
     controller,

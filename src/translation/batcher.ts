@@ -11,7 +11,10 @@ import type {
   TranslationRequest,
   TranslationResult,
 } from "../shared/types";
-import type { TranslationProvider } from "./provider";
+import type {
+  TranslationProvider,
+  TranslationStreamProvider,
+} from "./provider";
 import { isAutoRetryableErrorCode } from "./retry";
 
 export interface BatchLimits {
@@ -89,17 +92,28 @@ async function translateBatch(
   request: TranslationRequest,
   segments: readonly SourceSegment[],
   signal?: AbortSignal,
+  onResult?: (result: TranslationResult) => void,
 ): Promise<readonly TranslationResult[]> {
   throwIfAborted(signal);
   let providerResults: readonly TranslationResult[];
   try {
-    providerResults = await provider.translate(
+    const streamProvider = provider as Partial<TranslationStreamProvider>;
+    const translate =
+      onResult !== undefined && streamProvider.streamTranslate !== undefined
+        ? streamProvider.streamTranslate.bind(provider)
+        : provider.translate.bind(provider);
+    providerResults = await translate(
       {
         sourceLanguage: request.sourceLanguage,
         targetLanguage: request.targetLanguage,
         segments,
       },
-      signal === undefined ? undefined : { signal },
+      signal === undefined && onResult === undefined
+        ? undefined
+        : {
+            ...(signal === undefined ? {} : { signal }),
+            ...(onResult === undefined ? {} : { sendResult: onResult }),
+          },
     );
   } catch (error) {
     if (
@@ -142,6 +156,7 @@ export async function translateInBatches(
   request: TranslationRequest,
   limits: BatchLimits = DEFAULT_BATCH_LIMITS,
   signal?: AbortSignal,
+  onResult?: (result: TranslationResult) => void,
 ): Promise<readonly TranslationResult[]> {
   assertLimits(limits);
   throwIfAborted(signal);
@@ -159,7 +174,13 @@ export async function translateInBatches(
         return;
       }
 
-      const results = await translateBatch(provider, request, batch, signal);
+      const results = await translateBatch(
+        provider,
+        request,
+        batch,
+        signal,
+        onResult,
+      );
       for (const result of results) {
         resultsById.set(result.id, result);
       }

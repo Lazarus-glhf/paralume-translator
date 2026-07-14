@@ -221,6 +221,29 @@ export function parseContentCommand(
   return { ok: true, value: value as unknown as ContentCommandMessage };
 }
 
+export function parseTranslationResultMessage(
+  value: unknown,
+): ValidationResult<import("./protocol").BackgroundTranslationResultMessage> {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "protocolVersion",
+      "target",
+      "command",
+      "operationId",
+      "result",
+    ]) ||
+    value["protocolVersion"] !== PROTOCOL_VERSION ||
+    value["target"] !== "content" ||
+    value["command"] !== "translation-result" ||
+    !isOperationId(value["operationId"]) ||
+    !isTranslationResult(value["result"])
+  ) {
+    return invalid();
+  }
+  return { ok: true, value: value as never };
+}
+
 export function parseTranslationResponse(
   value: unknown,
 ): ValidationResult<TranslationResponse> {

@@ -71,6 +71,7 @@ export interface TranslationProgress {
 
 export interface ContentController {
   handleMessage(message: unknown): Promise<ContentResponse>;
+  handleStreamingResult(operationId: string, result: TranslationResult): void;
 }
 
 interface ActiveTranslation {
@@ -171,6 +172,10 @@ export function createContentController(
   );
   const manualRetries = new Map<string, ActiveManualRetry>();
   const issuedOperationIds = new Set<string>();
+  const streamingOperations = new Map<
+    string,
+    { generation: number; items: Map<string, ExtractedSegment> }
+  >();
 
   const nextOperationId = (): string => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -475,6 +480,10 @@ export function createContentController(
           }
 
           const operationId = takeOperationId();
+          streamingOperations.set(operationId, {
+            generation,
+            items: new Map(batch.map((item) => [item.segment.id, item])),
+          });
           const request: TranslationRequest = {
             sourceLanguage: "auto",
             targetLanguage: "zh-CN",
@@ -496,6 +505,7 @@ export function createContentController(
             continue;
           } finally {
             operationIds.delete(operationId);
+            streamingOperations.delete(operationId);
           }
           if (generation !== operationGeneration) {
             return;
@@ -660,6 +670,7 @@ export function createContentController(
     }
 
     operationGeneration += 1;
+    streamingOperations.clear();
     activeTranslation = undefined;
     activeSettingsRefresh = undefined;
     manualRetries.clear();
@@ -703,6 +714,35 @@ export function createContentController(
         case "clear":
           return Promise.resolve(clear());
       }
+    },
+    handleStreamingResult(
+      operationId: string,
+      result: TranslationResult,
+    ): void {
+      const operation = streamingOperations.get(operationId);
+      if (operation?.generation !== operationGeneration) {
+        return;
+      }
+      const extracted = operation.items.get(result.id);
+      if (
+        extracted === undefined ||
+        !extracted.element.isConnected ||
+        getCurrentSourceText(extracted.element, dependencies.state) !==
+          extracted.segment.text
+      ) {
+        return;
+      }
+      if (
+        dependencies.state.translationsBySource.get(extracted.element) !==
+        undefined
+      ) {
+        return;
+      }
+      const visible = getContentState(
+        dependencies.document,
+        dependencies.state,
+      ).visible;
+      renderResult(extracted, result, visible, result.status === "failure");
     },
   };
 }

@@ -5,7 +5,7 @@ import {
   exceedsPageRequestLimits,
   type PageRequestLimits,
 } from "../shared/request-budget";
-import type { TranslationRequest } from "../shared/types";
+import type { TranslationRequest, TranslationResult } from "../shared/types";
 import type {
   TranslationProvider,
   TranslationProviderResolver,
@@ -25,6 +25,14 @@ import { parseBackgroundMessage } from "./validation";
 
 export interface BackgroundMessageContext<Sender = unknown> {
   readonly sender: Sender;
+}
+
+export interface BackgroundHandlerDependencies<Sender = unknown> {
+  readonly sendResult?: (
+    sender: Sender,
+    operationId: string,
+    result: TranslationResult,
+  ) => void;
 }
 
 interface ActiveOperation {
@@ -75,13 +83,14 @@ function cancelledResponse(): TranslationResponse {
   return createErrorResponse(createError("TRANSLATION_CANCELLED"));
 }
 
-export function createBackgroundMessageHandler(
+export function createBackgroundMessageHandler<Sender = unknown>(
   provider: TranslationProvider | TranslationProviderResolver,
   limits: BatchLimits = DEFAULT_BATCH_LIMITS,
   pageRequestLimits: PageRequestLimits = DEFAULT_PAGE_REQUEST_LIMITS,
+  dependencies: BackgroundHandlerDependencies<Sender> = {},
 ): (
   message: unknown,
-  context?: BackgroundMessageContext,
+  context?: BackgroundMessageContext<Sender>,
 ) => Promise<BackgroundResponse> {
   const activeOperations = new Map<string, Map<string, ActiveOperation>>();
   const pendingCancellations = new Map<string, Map<string, true>>();
@@ -128,13 +137,14 @@ export function createBackgroundMessageHandler(
     return true;
   };
 
-  return (message, context = { sender: undefined }) => {
+  return (message, context) => {
+    const sender = context?.sender;
     const parsed = parseBackgroundMessage(message);
     if (!parsed.ok) {
       return Promise.resolve(createErrorResponse(parsed.error));
     }
 
-    const scope = senderScope(context.sender);
+    const scope = senderScope(sender);
     if (parsed.value.command === "cancel-translation") {
       const active = activeOperations.get(scope)?.get(parsed.value.operationId);
       if (active === undefined) {
@@ -201,6 +211,19 @@ export function createBackgroundMessageHandler(
           translationMessage.request,
           limits,
           controller.signal,
+          dependencies.sendResult === undefined
+            ? undefined
+            : (result) => {
+                if (!controller.signal.aborted) {
+                  if (sender !== undefined) {
+                    dependencies.sendResult?.(
+                      sender,
+                      translationMessage.operationId,
+                      result,
+                    );
+                  }
+                }
+              },
         );
         return { protocolVersion: PROTOCOL_VERSION, ok: true, results };
       } catch (error) {

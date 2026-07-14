@@ -2,10 +2,11 @@ import type { OpenAiSettings } from "../settings/types";
 import { UserFacingError } from "../shared/errors";
 import type { TranslationRequest, TranslationResult } from "../shared/types";
 import type {
-  TranslationProvider,
   TranslationProviderContext,
+  TranslationStreamProvider,
 } from "./provider";
 import { fetchProviderJson, type HttpProviderDependencies } from "./http";
+import { readServerSentEvents } from "./sse";
 import {
   createCompactTranslationIds,
   createCompactTranslationJsonSchema,
@@ -107,7 +108,18 @@ function extractChatText(payload: unknown): string {
   throw new UserFacingError("MALFORMED_PROVIDER_OUTPUT");
 }
 
-export class OpenAiTranslationProvider implements TranslationProvider {
+function streamedDelta(event: unknown): string | undefined {
+  if (
+    isRecord(event) &&
+    event["type"] === "response.output_text.delta" &&
+    typeof event["delta"] === "string"
+  ) {
+    return event["delta"];
+  }
+  return undefined;
+}
+
+export class OpenAiTranslationProvider implements TranslationStreamProvider {
   readonly name = "OpenAI-compatible";
 
   readonly #settings: ConfiguredOpenAiSettings;
@@ -119,6 +131,73 @@ export class OpenAiTranslationProvider implements TranslationProvider {
   ) {
     this.#settings = settings;
     this.#dependencies = dependencies;
+  }
+
+  async streamTranslate(
+    request: TranslationRequest,
+    context?: TranslationProviderContext,
+  ): Promise<readonly TranslationResult[]> {
+    if (this.#settings.protocol !== "responses") {
+      return this.translate(request, context);
+    }
+    const ids = createCompactTranslationIds(request);
+    const schema = createCompactTranslationJsonSchema(request.segments.length);
+    const body = JSON.stringify({
+      model: this.#settings.model,
+      reasoning: { effort: this.#settings.reasoningEffort },
+      stream: true,
+      input: [
+        { role: "system", content: systemPrompt() },
+        { role: "user", content: translationPrompt(request, ids) },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "paralume_translation_batch",
+          strict: true,
+          schema,
+        },
+      },
+    });
+    let serialized = "";
+    let cursor = 0;
+    const itemPattern =
+      /\{\s*"i"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"v"\s*:\s*"((?:\\.|[^"\\])*)"\s*\}/gu;
+    const emitted = new Set<string>();
+    await readServerSentEvents(
+      endpoint(this.#settings.baseUrl, "responses"),
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.#settings.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body,
+      },
+      this.#dependencies,
+      (event) => {
+        const delta = streamedDelta(event);
+        if (delta === undefined) return;
+        serialized += delta;
+        itemPattern.lastIndex = cursor;
+        let match: RegExpExecArray | null;
+        while ((match = itemPattern.exec(serialized)) !== null) {
+          cursor = itemPattern.lastIndex;
+          const compactId = JSON.parse(`"${match[1] ?? ""}"`) as string;
+          const translatedText = JSON.parse(`"${match[2] ?? ""}"`) as string;
+          const id = ids.originalByCompact.get(compactId);
+          if (!id || emitted.has(id) || !translatedText.trim()) {
+            throw new UserFacingError("MALFORMED_PROVIDER_OUTPUT");
+          }
+          emitted.add(id);
+          const result = { id, status: "success" as const, translatedText };
+          context?.onResult?.(result);
+          context?.sendResult?.(result);
+        }
+      },
+      context?.signal,
+    );
+    return parseCompactStructuredTranslations(serialized, request, ids);
   }
 
   async translate(

@@ -26,6 +26,14 @@ export interface BackgroundCancelTranslationMessage {
   operationId: OperationId;
 }
 
+export interface BackgroundTranslationResultMessage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  target: "content";
+  command: "translation-result";
+  operationId: OperationId;
+  result: TranslationResult;
+}
+
 export type BackgroundMessage =
   BackgroundTranslationMessage | BackgroundCancelTranslationMessage;
 
@@ -88,6 +96,19 @@ export function createBackgroundCancelTranslationMessage(
     target: "background",
     command: "cancel-translation",
     operationId,
+  };
+}
+
+export function createBackgroundTranslationResultMessage(
+  operationId: OperationId,
+  result: TranslationResult,
+): BackgroundTranslationResultMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    target: "content",
+    command: "translation-result",
+    operationId,
+    result,
   };
 }
 

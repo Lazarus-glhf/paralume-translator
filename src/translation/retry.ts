@@ -5,6 +5,7 @@ import type { TranslationRequest, TranslationResult } from "../shared/types";
 import type {
   TranslationProvider,
   TranslationProviderContext,
+  TranslationStreamProvider,
 } from "./provider";
 
 const AUTO_RETRYABLE_ERROR_CODES: ReadonlySet<ErrorCode> = new Set([
@@ -162,12 +163,19 @@ export function createRetryingProvider(
   settings: RetrySettings,
   dependencies: RetryRuntimeDependencies = {},
 ): TranslationProvider {
-  return {
+  const streamProvider = provider as Partial<TranslationStreamProvider>;
+  const wrapped: TranslationProvider & Partial<TranslationStreamProvider> = {
     name: provider.name,
     translate: (request, context) =>
       translateWithRetry(provider, request, settings, {
         ...dependencies,
         ...(context?.signal === undefined ? {} : { signal: context.signal }),
       }),
+    ...(streamProvider.streamTranslate === undefined
+      ? {}
+      : {
+          streamTranslate: streamProvider.streamTranslate.bind(provider),
+        }),
   };
+  return wrapped;
 }
