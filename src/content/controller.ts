@@ -177,6 +177,9 @@ export function createContentController(
     string,
     { generation: number; items: Map<string, ExtractedSegment> }
   >();
+  let liveProgress:
+    | { generation: number; total: number; completedIds: Set<string> }
+    | undefined;
 
   const nextOperationId = (): string => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -446,6 +449,11 @@ export function createContentController(
         currentCharacters += item.segment.text.length;
       }
       flushBatch();
+      liveProgress = {
+        generation,
+        total: extracted.length,
+        completedIds: new Set(),
+      };
       dependencies.onProgress?.({
         phase: "translating",
         completed: 0,
@@ -537,6 +545,18 @@ export function createContentController(
             if (result === undefined) {
               continue;
             }
+            const existingTranslation =
+              dependencies.state.translationsBySource.get(item.element);
+            if (
+              result.status === "failure" &&
+              existingTranslation !== undefined &&
+              dependencies.state.translationStatuses.get(
+                existingTranslation,
+              ) === "success"
+            ) {
+              succeeded += 1;
+              continue;
+            }
             renderResult(
               item,
               result,
@@ -548,12 +568,21 @@ export function createContentController(
             } else {
               succeeded += 1;
             }
+            if (liveProgress?.generation === generation) {
+              liveProgress.completedIds.add(item.segment.id);
+            }
+            dependencies.onProgress?.({
+              phase: "translating",
+              completed:
+                liveProgress?.generation === generation
+                  ? liveProgress.completedIds.size
+                  : succeeded + failed + stale,
+              total:
+                liveProgress?.generation === generation
+                  ? liveProgress.total
+                  : extracted.length,
+            });
           }
-          dependencies.onProgress?.({
-            phase: "translating",
-            completed: succeeded + failed + stale,
-            total: extracted.length,
-          });
         }
       };
 
@@ -678,6 +707,14 @@ export function createContentController(
     const generation = operationGeneration;
     const operationId = nextOperationId();
     const operationIds = new Set([operationId]);
+    for (const item of failed) {
+      setTranslationPending(item.translation, dependencies.state, true, locale);
+    }
+    dependencies.onProgress?.({
+      phase: "translating",
+      completed: 0,
+      total: failed.length,
+    });
     const promise = dependencies
       .requestTranslations(
         {
@@ -690,8 +727,38 @@ export function createContentController(
       .then((rawResponse) => {
         if (generation !== operationGeneration) return cancelled();
         const parsed = parseTranslationResponse(rawResponse);
-        if (!parsed.ok) return createErrorResponse(parsed.error);
-        if (!parsed.value.ok) return parsed.value;
+        if (!parsed.ok) {
+          for (const item of failed) {
+            setTranslationPending(
+              item.translation,
+              dependencies.state,
+              false,
+              locale,
+            );
+          }
+          dependencies.onProgress?.({
+            phase: "error",
+            completed: 0,
+            total: failed.length,
+          });
+          return createErrorResponse(parsed.error);
+        }
+        if (!parsed.value.ok) {
+          for (const item of failed) {
+            setTranslationPending(
+              item.translation,
+              dependencies.state,
+              false,
+              locale,
+            );
+          }
+          dependencies.onProgress?.({
+            phase: "error",
+            completed: 0,
+            total: failed.length,
+          });
+          return createErrorResponse(parsed.value.error);
+        }
         const byId = mapResultsById(
           failed.map((item) => item.segment),
           parsed.value.results,
@@ -728,9 +795,22 @@ export function createContentController(
           }),
         );
       })
-      .catch((error: unknown) =>
-        createErrorResponse(sanitizeError(error, "TRANSLATION_FAILED")),
-      )
+      .catch((error: unknown) => {
+        for (const item of failed) {
+          setTranslationPending(
+            item.translation,
+            dependencies.state,
+            false,
+            locale,
+          );
+        }
+        dependencies.onProgress?.({
+          phase: "error",
+          completed: 0,
+          total: failed.length,
+        });
+        return createErrorResponse(sanitizeError(error, "TRANSLATION_FAILED"));
+      })
       .finally(() => {
         operationIds.delete(operationId);
       });
@@ -839,16 +919,33 @@ export function createContentController(
         return;
       }
       if (
+        result.status === "failure" &&
         dependencies.state.translationsBySource.get(extracted.element) !==
-        undefined
+          undefined
       ) {
-        return;
+        const existing = dependencies.state.translationsBySource.get(
+          extracted.element,
+        );
+        if (
+          existing !== undefined &&
+          dependencies.state.translationStatuses.get(existing) === "success"
+        ) {
+          return;
+        }
       }
       const visible = getContentState(
         dependencies.document,
         dependencies.state,
       ).visible;
       renderResult(extracted, result, visible, result.status === "failure");
+      if (liveProgress?.generation === operationGeneration) {
+        liveProgress.completedIds.add(result.id);
+        dependencies.onProgress?.({
+          phase: "translating",
+          completed: liveProgress.completedIds.size,
+          total: liveProgress.total,
+        });
+      }
     },
   };
 }

@@ -1,7 +1,6 @@
 import {
   createError,
   sanitizeStructuredError,
-  UserFacingError,
   type ErrorCode,
 } from "../shared/errors";
 import { throwIfAborted } from "../shared/abort";
@@ -15,7 +14,6 @@ import type {
   TranslationProvider,
   TranslationStreamProvider,
 } from "./provider";
-import { isAutoRetryableErrorCode } from "./retry";
 
 export interface BatchLimits {
   maxSegments: number;
@@ -95,35 +93,24 @@ async function translateBatch(
   onResult?: (result: TranslationResult) => void,
 ): Promise<readonly TranslationResult[]> {
   throwIfAborted(signal);
-  let providerResults: readonly TranslationResult[];
-  try {
-    const streamProvider = provider as Partial<TranslationStreamProvider>;
-    const translate =
-      onResult !== undefined && streamProvider.streamTranslate !== undefined
-        ? streamProvider.streamTranslate.bind(provider)
-        : provider.translate.bind(provider);
-    providerResults = await translate(
-      {
-        sourceLanguage: request.sourceLanguage,
-        targetLanguage: request.targetLanguage,
-        segments,
-      },
-      signal === undefined && onResult === undefined
-        ? undefined
-        : {
-            ...(signal === undefined ? {} : { signal }),
-            ...(onResult === undefined ? {} : { sendResult: onResult }),
-          },
-    );
-  } catch (error) {
-    if (
-      error instanceof UserFacingError &&
-      isAutoRetryableErrorCode(error.code)
-    ) {
-      return segments.map((segment) => failure(segment, error.code));
-    }
-    throw error;
-  }
+  const streamProvider = provider as Partial<TranslationStreamProvider>;
+  const translate =
+    onResult !== undefined && streamProvider.streamTranslate !== undefined
+      ? streamProvider.streamTranslate.bind(provider)
+      : provider.translate.bind(provider);
+  const providerResults = await translate(
+    {
+      sourceLanguage: request.sourceLanguage,
+      targetLanguage: request.targetLanguage,
+      segments,
+    },
+    signal === undefined && onResult === undefined
+      ? undefined
+      : {
+          ...(signal === undefined ? {} : { signal }),
+          ...(onResult === undefined ? {} : { sendResult: onResult }),
+        },
+  );
   throwIfAborted(signal);
   const counts = new Map<string, number>();
   const byId = new Map<string, TranslationResult>();

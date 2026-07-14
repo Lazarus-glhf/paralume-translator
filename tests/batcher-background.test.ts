@@ -160,7 +160,7 @@ describe("translateInBatches", () => {
     ).rejects.toMatchObject({ code: "AUTHENTICATION_FAILED" });
   });
 
-  it("maps only exhausted approved recoverable failures to segment results for manual retry", async () => {
+  it("keeps exhausted recoverable failures at request scope", async () => {
     const provider: TranslationProvider = {
       name: "recoverable-exhaustion",
       translate: () => Promise.reject(new UserFacingError("NETWORK_ERROR")),
@@ -171,28 +171,7 @@ describe("translateInBatches", () => {
         provider,
         makeRequest(["First readable segment", "Second readable segment"]),
       ),
-    ).resolves.toEqual([
-      {
-        id: "segment-1",
-        status: "failure",
-        error: {
-          code: "NETWORK_ERROR",
-          message:
-            "The provider could not be reached. Check the network and endpoint settings.",
-          retryable: true,
-        },
-      },
-      {
-        id: "segment-2",
-        status: "failure",
-        error: {
-          code: "NETWORK_ERROR",
-          message:
-            "The provider could not be reached. Check the network and endpoint settings.",
-          retryable: true,
-        },
-      },
-    ]);
+    ).rejects.toMatchObject({ code: "NETWORK_ERROR" });
   });
 
   it("turns missing and duplicate provider IDs into per-segment failures", async () => {

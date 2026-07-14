@@ -862,6 +862,44 @@ describe("content controller workflow", () => {
     ]);
   });
 
+  it("never downgrades a streamed success when the final batch reports timeout", async () => {
+    document.body.innerHTML = `<p>Readable timeout protection paragraph.</p>`;
+    const response = deferred<unknown>();
+    let operationId = "";
+    let segment: TranslationRequest["segments"][number] | undefined;
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "stream-timeout" }),
+      requestTranslations: (request, id) => {
+        operationId = id;
+        segment = request.segments[0];
+        return response.promise;
+      },
+    });
+    const translating = controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    if (segment === undefined)
+      throw new Error("Missing streamed segment fixture.");
+    controller.handleStreamingResult(operationId, {
+      id: segment.id,
+      status: "success",
+      translatedText: "Stable streamed translation",
+    });
+    response.resolve(
+      successResponse([
+        {
+          id: segment.id,
+          status: "failure",
+          error: createError("REQUEST_TIMEOUT"),
+        },
+      ]),
+    );
+    await translating;
+    expect(document.body.textContent).toContain("Stable streamed translation");
+    expect(document.body.textContent).not.toContain("request timed out");
+  });
+
   it("retries all failed segments in one request", async () => {
     document.body.innerHTML = `<p>First failed block.</p><p>Second failed block.</p>`;
     const requests: TranslationRequest[] = [];
