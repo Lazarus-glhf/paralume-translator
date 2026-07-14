@@ -419,7 +419,7 @@ export function createContentController(
       }
 
       const batches: ExtractedSegment[][] = [];
-      const firstBatch = extracted.slice(0, 4);
+      const firstBatch = extracted.slice(0, 8);
       if (firstBatch.length > 0) {
         batches.push(firstBatch);
       }

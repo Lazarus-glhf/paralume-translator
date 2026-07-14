@@ -27,7 +27,7 @@ export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-5-mini",
     protocol: "responses",
-    reasoningEffort: "low",
+    reasoningEffort: "minimal",
   },
   microsoft: {
     endpoint: "https://api.cognitive.microsofttranslator.com",

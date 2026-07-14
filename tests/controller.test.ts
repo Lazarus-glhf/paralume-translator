@@ -448,7 +448,7 @@ describe("content controller workflow", () => {
     const translating = controller.handleMessage(
       createContentCommand("translate"),
     );
-    expect(requests.map((request) => request.segments.length)).toEqual([4, 17]);
+    expect(requests.map((request) => request.segments.length)).toEqual([8, 13]);
     expect(new Set(operationIds).size).toBe(2);
     const fastSegment = requests[1]?.segments[0];
     if (fastSegment === undefined) {
@@ -465,7 +465,7 @@ describe("content controller workflow", () => {
     );
     await vi.waitFor(() => {
       expect(
-        document.querySelector("#batch-4")?.nextElementSibling?.textContent,
+        document.querySelector("#batch-8")?.nextElementSibling?.textContent,
       ).toBe("Fast batch translation");
     });
     expect(
@@ -514,7 +514,7 @@ describe("content controller workflow", () => {
     const translating = controller.handleMessage(
       createContentCommand("translate"),
     );
-    expect(requests.map(({ segments }) => segments.length)).toEqual([4, 11]);
+    expect(requests.map(({ segments }) => segments.length)).toEqual([8, 7]);
     pending[0]?.resolve(
       successResponse(
         requests[0]?.segments.map((segment) => ({
@@ -527,7 +527,7 @@ describe("content controller workflow", () => {
     await vi.waitFor(() => {
       expect(
         document.querySelectorAll(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
-      ).toHaveLength(4);
+      ).toHaveLength(8);
     });
 
     pending[1]?.resolve(

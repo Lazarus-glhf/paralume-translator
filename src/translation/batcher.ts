@@ -21,9 +21,9 @@ export interface BatchLimits {
 }
 
 export const DEFAULT_BATCH_LIMITS: BatchLimits = {
-  maxSegments: 20,
-  maxCharacters: 6_000,
-  concurrency: 3,
+  maxSegments: 40,
+  maxCharacters: 12_000,
+  concurrency: 2,
 };
 
 function assertLimits(limits: BatchLimits): void {
