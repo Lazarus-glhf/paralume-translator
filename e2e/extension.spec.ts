@@ -1225,8 +1225,8 @@ test.describe("unpacked Chromium extension", () => {
         );
         await expect(translation).toHaveCSS("line-height", "38px");
         await expect(translation).toHaveCSS("opacity", "0.8");
-        await expect(translation).toHaveCSS("margin-top", "14px");
-        await expect(translation).toHaveCSS("margin-bottom", "14px");
+        await expect(translation).toHaveCSS("margin-top", "0px");
+        await expect(translation).toHaveCSS("margin-bottom", "28px");
       }
       await expect(retryPage.locator("#automatic-source")).toHaveAttribute(
         "style",

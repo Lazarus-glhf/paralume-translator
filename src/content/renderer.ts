@@ -48,6 +48,8 @@ function createTranslationElement(source: HTMLElement): HTMLElement {
   element.dir = "auto";
   element.style.boxSizing = "border-box";
   element.style.padding = "0.2em 0 0.35em";
+  element.style.position = "relative";
+  element.style.insetBlockStart = "-0.25em";
   element.style.borderInlineStart = "0 solid transparent";
   element.style.borderRadius = "0.25em";
   element.style.fontStyle = "normal";
@@ -198,7 +200,8 @@ function applyAppearance(
   if (appearance.opacity !== DEFAULT_APPEARANCE_SETTINGS.opacity) {
     translation.style.opacity = String(appearance.opacity);
   }
-  translation.style.marginBlock = `${String(appearance.verticalSpacing)}px`;
+  translation.style.marginBlockStart = "0";
+  translation.style.marginBlockEnd = `${String(appearance.verticalSpacing * 2)}px`;
 }
 
 function renderFailure(

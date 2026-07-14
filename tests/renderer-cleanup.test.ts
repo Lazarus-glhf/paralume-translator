@@ -68,7 +68,8 @@ describe("safe translation rendering", () => {
       extracted.segment.id,
     );
     expect(translation.style.padding).toBe("0.2em 0px 0.35em");
-
+    expect(translation.style.position).toBe("relative");
+    expect(translation.style.insetBlockStart).toBe("-0.25em");
     expect(translation.style.borderInlineStart).toBe("0 solid transparent");
     expect(translation.style.transition).toContain("opacity");
   });
@@ -381,7 +382,8 @@ describe("safe translation rendering", () => {
     expect(first.style.backgroundColor).toBe("#ddeeff");
     expect(first.style.lineHeight).toBe("2");
     expect(first.style.opacity).toBe("0.7");
-    expect(first.style.marginBlock).toBe("17px");
+    expect(first.style.marginBlockStart).toBe("0");
+    expect(first.style.marginBlockEnd).toBe("34px");
     expect(source.getAttribute("style")).toBe(originalSourceStyle);
 
     const secondSource = document.createElement("p");
