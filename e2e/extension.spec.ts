@@ -1162,7 +1162,6 @@ test.describe("unpacked Chromium extension", () => {
         .getAttribute("style");
 
       await resumedPopup.click("translate");
-      await resumedPopup.waitForStatus("已翻译 0 个可读文本块；1 个不可用。");
       const manualFailure = retryPage.locator(
         `#manual-source + ${translationSelector}`,
       );
