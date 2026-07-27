@@ -30,7 +30,7 @@
     "verify": "prettier --check . && eslint . && wxt prepare && tsc --noEmit && vitest run && wxt build && wxt build -b edge && playwright test"
   },
   "dependencies": {
-    "react": "19.2.7",
+    "react": "19.2.8",
     "react-dom": "19.2.7"
   },
   "devDependencies": {
