@@ -48,27 +48,3 @@ export async function requestProviderOriginPermission(
     throw new UserFacingError("PERMISSION_MISSING");
   }
 }
-
-export type StalePermissionRemoval = "not-needed" | "removed" | "failed";
-
-export async function removeStaleProviderOriginPermission(
-  previous: ProviderSettings,
-  next: ProviderSettings,
-  permissions: ProviderPermissionsApi,
-): Promise<StalePermissionRemoval> {
-  const previousOrigin = getProviderOriginPattern(previous);
-  const nextOrigin = getProviderOriginPattern(next);
-  if (previousOrigin === undefined || previousOrigin === nextOrigin) {
-    return "not-needed";
-  }
-  if (permissions.remove === undefined) {
-    return "failed";
-  }
-  try {
-    return (await permissions.remove({ origins: [previousOrigin] }))
-      ? "removed"
-      : "failed";
-  } catch {
-    return "failed";
-  }
-}

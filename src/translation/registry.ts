@@ -65,6 +65,9 @@ export function createSettingsBackedProviderResolver(
       ...(dependencies.timeoutMs === undefined
         ? {}
         : { timeoutMs: dependencies.timeoutMs }),
+      ...(dependencies.streamMaxDurationMs === undefined
+        ? {}
+        : { streamMaxDurationMs: dependencies.streamMaxDurationMs }),
       ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
     };
     return createRetryingProvider(

@@ -144,7 +144,7 @@ jobs:
             "release-assets/${ASSET_PREFIX}-SHA256SUMS.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Paralume ${RELEASE_VERSION}" \
-            --notes "Paralume 0.1.0 public release. Verify downloads with the attached SHA-256 checksums." \
+            --notes "Paralume ${RELEASE_VERSION} public release. Verify downloads with the attached SHA-256 checksums." \
             --verify-tag
 
       - name: Create release and tag from manual dispatch
@@ -159,5 +159,5 @@ jobs:
             "release-assets/${ASSET_PREFIX}-SHA256SUMS.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Paralume ${RELEASE_VERSION}" \
-            --notes "Paralume 0.1.0 public release. Verify downloads with the attached SHA-256 checksums." \
+            --notes "Paralume ${RELEASE_VERSION} public release. Verify downloads with the attached SHA-256 checksums." \
             --verify-tag

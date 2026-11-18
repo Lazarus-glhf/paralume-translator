@@ -4,6 +4,7 @@ import {
   PARALUME_RETRY_ATTRIBUTE,
   PARALUME_SOURCE_ID_ATTRIBUTE,
   PARALUME_TRANSLATION_FOR_ATTRIBUTE,
+  PARALUME_TRANSLATION_STATUS_ATTRIBUTE,
 } from "../src/content/constants";
 import {
   createContentController,
@@ -21,6 +22,7 @@ import {
   DEFAULT_RETRY_SETTINGS,
 } from "../src/settings/repository";
 import type { ContentSettings } from "../src/settings/types";
+import { trustedClick } from "./helpers/dom";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -989,8 +991,16 @@ describe("content controller workflow", () => {
     }
     expect(failure.textContent).toContain("翻译服务拒绝了已配置的凭据");
 
+    // A page script can reach this page-DOM button; its synthetic clicks
+    // must never start a provider request.
     button.click();
-    button.click();
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(requestTranslations).toHaveBeenCalledOnce();
+    expect(button.disabled).toBe(false);
+
+    trustedClick(button);
+    trustedClick(button);
     await vi.waitFor(() => {
       expect(requestTranslations).toHaveBeenCalledTimes(2);
     });
@@ -1102,7 +1112,7 @@ describe("content controller workflow", () => {
       throw new Error("Segment failure Retry button was not rendered.");
     }
 
-    button.click();
+    trustedClick(button);
     await vi.waitFor(() => {
       expect(failure.textContent).toContain(
         "Access to the configured provider origin is not granted.",
@@ -1110,7 +1120,7 @@ describe("content controller workflow", () => {
     });
     expect(failure.querySelector("button")).toBeNull();
     expect(failure.hasAttribute("aria-busy")).toBe(false);
-    button.click();
+    trustedClick(button);
     expect(requestTranslations).toHaveBeenCalledTimes(2);
   });
 
@@ -1142,7 +1152,11 @@ describe("content controller workflow", () => {
     });
 
     await controller.handleMessage(createContentCommand("translate"));
-    document.querySelector<HTMLButtonElement>("button")?.click();
+    const manualRetry = document.querySelector<HTMLButtonElement>("button");
+    if (manualRetry === null) {
+      throw new Error("Manual retry button was not rendered.");
+    }
+    trustedClick(manualRetry);
     await expect(
       controller.handleMessage(createContentCommand("clear")),
     ).resolves.toMatchObject({ ok: true, state: { translationCount: 0 } });
@@ -1205,7 +1219,11 @@ describe("content controller workflow", () => {
     });
 
     await controller.handleMessage(createContentCommand("translate"));
-    document.querySelector<HTMLButtonElement>("button")?.click();
+    const manualRetry = document.querySelector<HTMLButtonElement>("button");
+    if (manualRetry === null) {
+      throw new Error("Manual retry button was not rendered.");
+    }
+    trustedClick(manualRetry);
     await controller.handleMessage(createContentCommand("clear"));
 
     expect(requestTranslations).toHaveBeenCalledOnce();
@@ -1222,5 +1240,634 @@ describe("content controller workflow", () => {
     expect(
       document.querySelector(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
     ).toBeNull();
+  });
+
+  it.each([
+    "RATE_LIMITED",
+    "REQUEST_TIMEOUT",
+    "NETWORK_ERROR",
+    "SERVER_UNAVAILABLE",
+  ] as const)(
+    "renders retryable failures for unfinished segments when a whole batch fails with %s",
+    async (code) => {
+      document.body.innerHTML = `
+        <p id="streamed">Streamed readable paragraph before the batch failure.</p>
+        <p id="pending-one">First pending readable paragraph in the failed batch.</p>
+        <p id="pending-two">Second pending readable paragraph in the failed batch.</p>
+      `;
+      const requests: TranslationRequest[] = [];
+      const firstResponse = deferred<unknown>();
+      let firstOperationId = "";
+      const progress: TranslationProgress[] = [];
+      const controller = createContentController({
+        document,
+        state: createContentRuntimeState({ runtimeId: `batch-${code}` }),
+        requestTranslations: (request, operationId) => {
+          requests.push(request);
+          if (requests.length === 1) {
+            firstOperationId = operationId;
+            return firstResponse.promise;
+          }
+          return Promise.resolve(
+            successResponse(
+              request.segments.map((segment) => ({
+                id: segment.id,
+                status: "success" as const,
+                translatedText: `Retried ${segment.text}`,
+              })),
+            ),
+          );
+        },
+        onProgress: (update) => {
+          progress.push(update);
+        },
+      });
+
+      const translating = controller.handleMessage(
+        createContentCommand("translate"),
+      );
+      const streamed = requests[0]?.segments[0];
+      if (streamed === undefined) {
+        throw new Error("The first batch request was not captured.");
+      }
+      controller.handleStreamingResult(firstOperationId, {
+        id: streamed.id,
+        status: "success",
+        translatedText: "Streamed translation survives",
+      });
+      firstResponse.resolve({
+        protocolVersion: 1,
+        ok: false,
+        error: createError(code),
+      });
+
+      await expect(translating).resolves.toMatchObject({
+        ok: false,
+        error: { code },
+      });
+      expect(
+        document.querySelector("#streamed")?.nextElementSibling?.textContent,
+      ).toBe("Streamed translation survives");
+      for (const id of ["pending-one", "pending-two"]) {
+        const failure = document.querySelector(`#${id}`)?.nextElementSibling;
+        expect(
+          failure?.getAttribute(PARALUME_TRANSLATION_STATUS_ATTRIBUTE),
+        ).toBe("failure");
+        expect(
+          failure?.querySelector(`[${PARALUME_RETRY_ATTRIBUTE}]`),
+        ).not.toBeNull();
+      }
+      expect(progress).toContainEqual({
+        phase: "translating",
+        completed: 3,
+        total: 3,
+      });
+
+      await expect(
+        controller.handleMessage(createContentCommand("retry-failed")),
+      ).resolves.toMatchObject({
+        ok: true,
+        message: { id: "content.retryFailedComplete", values: { count: 2 } },
+      });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.segments.map(({ id }) => id)).toEqual(
+        requests[0]?.segments.slice(1).map(({ id }) => id),
+      );
+      expect(
+        document.querySelector("#pending-one")?.nextElementSibling?.textContent,
+      ).toContain("Retried First pending readable paragraph");
+      expect(
+        document.querySelectorAll(`[${PARALUME_RETRY_ATTRIBUTE}]`),
+      ).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    "API_KEY_UNCONFIGURED",
+    "AUTHENTICATION_FAILED",
+    "VALIDATION_ERROR",
+    "PERMISSION_MISSING",
+  ] as const)(
+    "stops dispatching remaining batches after configuration failure %s",
+    async (code) => {
+      document.body.innerHTML = [1, 2, 3, 4]
+        .map(
+          (index) =>
+            `<p>Readable paragraph number ${String(index)} for a configuration stop.</p>`,
+        )
+        .join("");
+      const requestTranslations = vi
+        .fn<() => Promise<unknown>>()
+        .mockResolvedValueOnce({
+          protocolVersion: 1,
+          ok: false,
+          error: createError("NETWORK_ERROR"),
+        })
+        .mockResolvedValue({
+          protocolVersion: 1,
+          ok: false,
+          error: createError(code),
+        });
+      const progress: TranslationProgress[] = [];
+      const controller = createContentController({
+        document,
+        state: createContentRuntimeState({ runtimeId: `config-${code}` }),
+        requestTranslations,
+        progressiveBatchLimits: {
+          maxSegments: 1,
+          maxCharacters: 12_000,
+          concurrency: 1,
+        },
+        onProgress: (update) => {
+          progress.push(update);
+        },
+      });
+
+      // The actionable configuration error wins over the earlier transient one.
+      await expect(
+        controller.handleMessage(createContentCommand("translate")),
+      ).resolves.toMatchObject({ ok: false, error: { code } });
+      expect(requestTranslations).toHaveBeenCalledTimes(2);
+      // Only the transient first batch gets a retryable failure.
+      expect(
+        document.querySelectorAll(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`),
+      ).toHaveLength(1);
+      expect(
+        document.querySelectorAll(`[${PARALUME_RETRY_ATTRIBUTE}]`),
+      ).toHaveLength(1);
+      expect(progress.at(-1)?.phase).toBe("error");
+    },
+  );
+
+  it("keeps manual Retry when a single-segment retry hits a transient whole-request failure", async () => {
+    document.body.innerHTML = `<p>Readable paragraph for a transient manual retry failure.</p>`;
+    let call = 0;
+    const requestTranslations = vi.fn((request: TranslationRequest) => {
+      call += 1;
+      if (call === 1) {
+        return Promise.resolve(
+          successResponse([
+            {
+              id: request.segments[0]?.id ?? "missing",
+              status: "failure",
+              error: createError("NETWORK_ERROR"),
+            },
+          ]),
+        );
+      }
+      return Promise.resolve({
+        protocolVersion: 1,
+        ok: false,
+        error: createError("RATE_LIMITED"),
+      });
+    });
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "transient-manual" }),
+      requestTranslations,
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+    const failure = document.querySelector<HTMLElement>(
+      `[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`,
+    );
+    if (failure === null) {
+      throw new Error("Segment failure UI was not rendered.");
+    }
+    const firstRetry = failure.querySelector<HTMLButtonElement>(
+      `[${PARALUME_RETRY_ATTRIBUTE}]`,
+    );
+    if (firstRetry === null) {
+      throw new Error("Segment failure Retry button was not rendered.");
+    }
+    trustedClick(firstRetry);
+    await vi.waitFor(() => {
+      expect(failure.textContent).toContain("rate limit was reached");
+    });
+    const retryAgain = failure.querySelector<HTMLButtonElement>(
+      `[${PARALUME_RETRY_ATTRIBUTE}]`,
+    );
+    if (retryAgain === null) {
+      throw new Error("Retry was not kept after a recoverable failure.");
+    }
+    expect(retryAgain.disabled).toBe(false);
+    trustedClick(retryAgain);
+    await vi.waitFor(() => {
+      expect(requestTranslations).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("keeps manual Retry when the retry request itself throws", async () => {
+    document.body.innerHTML = `<p>Readable paragraph for a thrown manual retry request.</p>`;
+    let call = 0;
+    const requestTranslations = vi.fn((request: TranslationRequest) => {
+      call += 1;
+      if (call === 1) {
+        return Promise.resolve(
+          successResponse([
+            {
+              id: request.segments[0]?.id ?? "missing",
+              status: "failure",
+              error: createError("NETWORK_ERROR"),
+            },
+          ]),
+        );
+      }
+      if (call === 2) {
+        return Promise.reject(
+          new Error(
+            "Could not establish connection. Receiving end does not exist.",
+          ),
+        );
+      }
+      return Promise.resolve(
+        successResponse([
+          {
+            id: request.segments[0]?.id ?? "missing",
+            status: "success",
+            translatedText: "Recovered after the messaging failure",
+          },
+        ]),
+      );
+    });
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "thrown-manual" }),
+      requestTranslations,
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+    const firstRetry = document.querySelector<HTMLButtonElement>(
+      `[${PARALUME_RETRY_ATTRIBUTE}]`,
+    );
+    if (firstRetry === null) {
+      throw new Error("Segment failure Retry button was not rendered.");
+    }
+    trustedClick(firstRetry);
+    await vi.waitFor(() => {
+      expect(requestTranslations).toHaveBeenCalledTimes(2);
+      expect(
+        document.querySelector(`[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`)
+          ?.textContent,
+      ).toContain("The translation request failed.");
+    });
+    // The exception text itself is never shown.
+    expect(document.body.textContent).not.toContain("Receiving end");
+    const retryAgain = document.querySelector<HTMLButtonElement>(
+      `[${PARALUME_RETRY_ATTRIBUTE}]`,
+    );
+    if (retryAgain === null) {
+      throw new Error("Retry was lost after the retry request threw.");
+    }
+    expect(retryAgain.disabled).toBe(false);
+
+    trustedClick(retryAgain);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Recovered after the messaging failure",
+      );
+    });
+    expect(requestTranslations).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not report a late bulk retry rejection after Clear", async () => {
+    document.body.innerHTML = `<p>Readable paragraph for a cancelled bulk retry.</p>`;
+    let rejectRetry: ((reason: unknown) => void) | undefined;
+    let call = 0;
+    const progress = vi.fn<(value: TranslationProgress) => void>();
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "bulk-clear" }),
+      requestTranslations: (request) => {
+        call += 1;
+        if (call === 1) {
+          return Promise.resolve(
+            successResponse([
+              {
+                id: request.segments[0]?.id ?? "missing",
+                status: "failure",
+                error: createError("NETWORK_ERROR"),
+              },
+            ]),
+          );
+        }
+        return new Promise((_resolve, reject) => {
+          rejectRetry = reject;
+        });
+      },
+      cancelTranslation: () => Promise.resolve(),
+      onProgress: progress,
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+    const retrying = controller.handleMessage(
+      createContentCommand("retry-failed"),
+    );
+    await vi.waitFor(() => {
+      expect(rejectRetry).toBeDefined();
+    });
+    await controller.handleMessage(createContentCommand("clear"));
+    expect(progress.mock.lastCall?.[0]).toEqual({
+      phase: "idle",
+      completed: 0,
+      total: 0,
+    });
+
+    rejectRetry?.(new Error("The message port closed before a response."));
+
+    await expect(retrying).resolves.toMatchObject({
+      ok: true,
+      message: { id: "content.cancelled" },
+    });
+    expect(progress.mock.lastCall?.[0]).toEqual({
+      phase: "idle",
+      completed: 0,
+      total: 0,
+    });
+  });
+
+  it("never lowers terminal progress below segments already streamed", async () => {
+    document.body.innerHTML = `
+      <p>First readable paragraph streamed before failure.</p>
+      <p>Second readable paragraph never translated.</p>
+    `;
+    const pending = deferred<unknown>();
+    const progress = vi.fn<(value: TranslationProgress) => void>();
+    const operations: string[] = [];
+    const requests: TranslationRequest[] = [];
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "streamed-progress" }),
+      requestTranslations: (request, operationId) => {
+        requests.push(request);
+        operations.push(operationId);
+        return pending.promise;
+      },
+      onProgress: progress,
+    });
+
+    const translating = controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    await vi.waitFor(() => {
+      expect(requests).toHaveLength(1);
+    });
+    const [firstSegment] = requests[0]?.segments ?? [];
+    const operationId = operations[0];
+    if (firstSegment === undefined || operationId === undefined) {
+      throw new Error("The batch request was not captured.");
+    }
+    controller.handleStreamingResult(operationId, {
+      id: firstSegment.id,
+      status: "success",
+      translatedText: "Streamed translation",
+    });
+    expect(progress.mock.lastCall?.[0]).toEqual({
+      phase: "translating",
+      completed: 1,
+      total: 2,
+    });
+
+    pending.resolve({
+      protocolVersion: 1,
+      ok: false,
+      error: createError("MALFORMED_PROVIDER_OUTPUT"),
+    });
+
+    await expect(translating).resolves.toMatchObject({
+      ok: false,
+      error: { code: "MALFORMED_PROVIDER_OUTPUT" },
+    });
+    expect(progress.mock.lastCall?.[0]).toEqual({
+      phase: "error",
+      completed: 1,
+      total: 2,
+    });
+    expect(document.body.textContent).toContain("Streamed translation");
+  });
+
+  describe("source text changes around Retry", () => {
+    const failFirstThen = (
+      later: (request: TranslationRequest) => Promise<unknown>,
+    ) => {
+      const requests: TranslationRequest[] = [];
+      const requestTranslations = vi.fn((request: TranslationRequest) => {
+        requests.push(request);
+        if (requests.length === 1) {
+          return Promise.resolve(
+            successResponse(
+              request.segments.map((segment): TranslationResult => ({
+                id: segment.id,
+                status: "failure",
+                error: createError("UNTRANSLATED_OUTPUT"),
+              })),
+            ),
+          );
+        }
+        return later(request);
+      });
+      return { requests, requestTranslations };
+    };
+
+    const echoSuccess = (request: TranslationRequest) =>
+      successResponse(
+        request.segments.map((segment): TranslationResult => ({
+          id: segment.id,
+          status: "success",
+          translatedText: `Translated ${segment.text}`,
+        })),
+      );
+
+    const failureFor = (source: Element | null): HTMLElement => {
+      const id = source?.getAttribute(PARALUME_SOURCE_ID_ATTRIBUTE);
+      const failure =
+        id === null || id === undefined
+          ? null
+          : document.querySelector<HTMLElement>(
+              `[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}="${id}"]`,
+            );
+      if (failure === null) {
+        throw new Error("Segment failure UI was not rendered.");
+      }
+      return failure;
+    };
+
+    const retryButton = (failure: HTMLElement): HTMLButtonElement => {
+      const button = failure.querySelector<HTMLButtonElement>(
+        `[${PARALUME_RETRY_ATTRIBUTE}]`,
+      );
+      if (button === null) {
+        throw new Error("Segment Retry button was not rendered.");
+      }
+      return button;
+    };
+
+    it("drops a failure instead of leaving Retry pending when the source changes during a manual retry", async () => {
+      document.body.innerHTML = `<p id="source">Original paragraph for a changing manual retry.</p>`;
+      const manualResponse = deferred<unknown>();
+      let laterCalls = 0;
+      const { requests, requestTranslations } = failFirstThen((request) => {
+        laterCalls += 1;
+        return laterCalls === 1
+          ? manualResponse.promise
+          : Promise.resolve(echoSuccess(request));
+      });
+      const state = createContentRuntimeState({ runtimeId: "stale-manual" });
+      const controller = createContentController({
+        document,
+        state,
+        requestTranslations,
+      });
+
+      await controller.handleMessage(createContentCommand("translate"));
+      const source = document.querySelector<HTMLElement>("#source");
+      const failure = failureFor(source);
+      const button = retryButton(failure);
+      trustedClick(button);
+      await vi.waitFor(() => {
+        expect(requestTranslations).toHaveBeenCalledTimes(2);
+      });
+      expect(button.disabled).toBe(true);
+
+      if (source === null) throw new Error("Source paragraph is missing.");
+      source.textContent = "Rewritten paragraph after the retry started.";
+      const segmentId = requests[1]?.segments[0]?.id ?? "missing";
+      manualResponse.resolve(
+        successResponse([
+          {
+            id: segmentId,
+            status: "success",
+            translatedText: "Late translation of the old text",
+          },
+        ]),
+      );
+
+      await vi.waitFor(() => {
+        expect(failure.isConnected).toBe(false);
+      });
+      expect(document.body.textContent).not.toContain(
+        "Late translation of the old text",
+      );
+      expect(document.querySelector(`[${PARALUME_RETRY_ATTRIBUTE}]`)).toBe(
+        null,
+      );
+      expect(document.querySelector("[aria-busy]")).toBeNull();
+      expect(source.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(false);
+      expect(state.translations.size).toBe(0);
+
+      // The rewritten source is extractable again on the next translate.
+      await controller.handleMessage(createContentCommand("translate"));
+      expect(requests[2]?.segments.map(({ text }) => text)).toEqual([
+        "Rewritten paragraph after the retry started.",
+      ]);
+      expect(document.body.textContent).toContain(
+        "Translated Rewritten paragraph after the retry started.",
+      );
+    });
+
+    it("does not send the old text when the source changed before Retry is clicked", async () => {
+      document.body.innerHTML = `<p id="source">Original paragraph before a later edit.</p>`;
+      const { requestTranslations } = failFirstThen((request) =>
+        Promise.resolve(echoSuccess(request)),
+      );
+      const controller = createContentController({
+        document,
+        state: createContentRuntimeState({ runtimeId: "stale-before-click" }),
+        requestTranslations,
+      });
+
+      await controller.handleMessage(createContentCommand("translate"));
+      const source = document.querySelector<HTMLElement>("#source");
+      const failure = failureFor(source);
+      const button = retryButton(failure);
+      if (source === null) throw new Error("Source paragraph is missing.");
+      source.textContent = "Edited paragraph that was never translated.";
+
+      trustedClick(button);
+      await vi.waitFor(() => {
+        expect(failure.isConnected).toBe(false);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(requestTranslations).toHaveBeenCalledOnce();
+      expect(source.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(false);
+    });
+
+    it("clears every pending Retry after a bulk retry where one source changed mid-request", async () => {
+      document.body.innerHTML = `<p id="first">First paragraph for bulk retry.</p><p id="second">Second paragraph for bulk retry.</p>`;
+      const bulkResponse = deferred<unknown>();
+      const { requests, requestTranslations } = failFirstThen(
+        () => bulkResponse.promise,
+      );
+      const controller = createContentController({
+        document,
+        state: createContentRuntimeState({ runtimeId: "stale-bulk" }),
+        requestTranslations,
+      });
+
+      await controller.handleMessage(createContentCommand("translate"));
+      const first = document.querySelector<HTMLElement>("#first");
+      const second = document.querySelector<HTMLElement>("#second");
+      const firstFailure = failureFor(first);
+      const secondFailure = failureFor(second);
+      const retrying = controller.handleMessage(
+        createContentCommand("retry-failed"),
+      );
+      await vi.waitFor(() => {
+        expect(requestTranslations).toHaveBeenCalledTimes(2);
+      });
+      expect(retryButton(firstFailure).disabled).toBe(true);
+      expect(retryButton(secondFailure).disabled).toBe(true);
+
+      if (second === null) throw new Error("Second paragraph is missing.");
+      second.textContent = "Second paragraph rewritten during bulk retry.";
+      const request = requests[1];
+      if (request === undefined) throw new Error("Bulk retry not captured.");
+      bulkResponse.resolve(echoSuccess(request));
+      await retrying;
+
+      expect(firstFailure.textContent).toBe(
+        "Translated First paragraph for bulk retry.",
+      );
+      expect(secondFailure.isConnected).toBe(false);
+      expect(second.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(false);
+      expect(document.body.textContent).not.toContain(
+        "Translated Second paragraph for bulk retry.",
+      );
+      expect(document.querySelector("[aria-busy]")).toBeNull();
+      expect(document.querySelector(`[${PARALUME_RETRY_ATTRIBUTE}]`)).toBe(
+        null,
+      );
+    });
+
+    it("skips and drops failures whose source changed before a bulk retry", async () => {
+      document.body.innerHTML = `<p id="first">First paragraph that stays.</p><p id="second">Second paragraph that changes.</p>`;
+      const { requests, requestTranslations } = failFirstThen((request) =>
+        Promise.resolve(echoSuccess(request)),
+      );
+      const controller = createContentController({
+        document,
+        state: createContentRuntimeState({ runtimeId: "stale-before-bulk" }),
+        requestTranslations,
+      });
+
+      await controller.handleMessage(createContentCommand("translate"));
+      const second = document.querySelector<HTMLElement>("#second");
+      const secondFailure = failureFor(second);
+      if (second === null) throw new Error("Second paragraph is missing.");
+      second.textContent = "Second paragraph after an edit.";
+
+      await controller.handleMessage(createContentCommand("retry-failed"));
+      expect(requests[1]?.segments.map(({ text }) => text)).toEqual([
+        "First paragraph that stays.",
+      ]);
+      expect(secondFailure.isConnected).toBe(false);
+      expect(second.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(false);
+
+      const again = await controller.handleMessage(
+        createContentCommand("retry-failed"),
+      );
+      expect(again.ok && again.message.id).toBe("content.retryFailedEmpty");
+      expect(requestTranslations).toHaveBeenCalledTimes(2);
+    });
   });
 });

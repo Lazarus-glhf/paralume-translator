@@ -6,9 +6,10 @@ Paralume（并译）is an open-source, local-first bilingual webpage translator 
 Chrome and Edge. It keeps the original page intact and inserts each translation
 beside its source block, so you can read both languages in parallel.
 
-Release `0.1.0` introduces an always-available in-page floating control, a compact
-edge dock, accurate page-level progress, per-site visibility controls, and a new
-Parallel P extension icon. Translation still starts only after an explicit
+Release `0.1.1` improves translation retries, streaming completion, hidden-content
+filtering, nested-block extraction, progress updates, and error recovery. It also
+restricts credential access and prevents page scripts from triggering translation
+through synthetic clicks. Translation starts only after an explicit
 **Translate page** action.
 
 ## Highlights
@@ -31,10 +32,10 @@ Parallel P extension icon. Translation still starts only after an explicit
 ## Install from GitHub Releases
 
 1. Open [GitHub Releases](https://github.com/Lazarus-glhf/paralume-translator/releases)
-   and select `v0.1.0`.
-2. Download `paralume-translator-0.1.0-chrome.zip` or
-   `paralume-translator-0.1.0-edge.zip`, plus
-   `paralume-translator-0.1.0-SHA256SUMS.txt`.
+   and select `v0.1.1`.
+2. Download `paralume-translator-0.1.1-chrome.zip` or
+   `paralume-translator-0.1.1-edge.zip`, plus
+   `paralume-translator-0.1.1-SHA256SUMS.txt`.
 3. Verify the ZIP digest with `sha256sum`, `shasum -a 256`, or PowerShell
    `Get-FileHash -Algorithm SHA256`.
 4. Extract the ZIP to a permanent local directory.
@@ -69,7 +70,11 @@ Paralume is BYOK software:
 
 - **OpenAI-compatible** supports Responses (`/responses`) and Chat Completions
   (`/chat/completions`) at user-configured HTTPS endpoints with strict structured
-  output.
+  output. Responses requests send `store: false`; this asks the provider not to
+  store the response but cannot rule out provider-side logging. Reasoning effort
+  can be set to **Don't send** for models or compatible endpoints that reject a
+  reasoning parameter. **Test saved provider** uses the same streaming request as
+  page translation.
 - **Microsoft Translator** supports configurable HTTPS Endpoint, API Key, and
   Region and calls Translator v3.
 - **Mock** produces deterministic development output only when selected.
@@ -78,6 +83,19 @@ API keys are stored in `chrome.storage.local` in the local browser profile. This
 storage is **not an encrypted vault**. Use limited-purpose keys and provider quota
 or billing controls. Options receives only `apiKeyConfigured` flags; content
 scripts never receive provider credentials.
+
+- Only Paralume's own extension pages (Options, Popup) may read provider
+  settings, save settings or keys, clear keys, or run a connection test. The
+  background rejects these commands from content scripts based on the
+  browser-provided sender.
+- A saved key is bound to its endpoint origin. Saving a Base URL or Endpoint on a
+  different origin without entering a key removes the old key, so it is never
+  sent to the new server.
+- The background asks the browser to restrict `chrome.storage.local` to trusted
+  extension contexts (`setAccessLevel`), and content scripts read the
+  disabled-site list through background messages. Browsers that do not support
+  this restriction leave `storage.local` readable by content scripts, and a
+  compromised renderer must be assumed able to reach it.
 
 ## Safety model
 
@@ -105,8 +123,8 @@ The Manifest V3 extension requests:
   translation providers.
 
 A single static content script runs at `document_idle` on HTTP and HTTPS pages.
-It checks the local disabled-site list before installing the isolated Shadow DOM
-control. No script is registered for browser-internal pages.
+It asks the background whether the current site is disabled before installing
+the isolated Shadow DOM control. No script is registered for browser-internal pages.
 
 ## Architecture
 

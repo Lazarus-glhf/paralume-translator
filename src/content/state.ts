@@ -15,7 +15,7 @@ export interface ContentRuntimeState {
     HTMLElement,
     {
       readonly button: HTMLButtonElement;
-      readonly listener: () => void;
+      readonly listener: (event: Event) => void;
     }
   >;
   readonly sourceMarkers: Map<HTMLElement, SourceMarkerState>;

@@ -27,6 +27,10 @@ export const SAFE_ERROR_MESSAGES = {
   MALFORMED_JSON: "The provider returned malformed JSON.",
   MALFORMED_PROVIDER_OUTPUT:
     "The provider returned output that does not match the required format.",
+  UNTRANSLATED_OUTPUT:
+    "The provider returned the source text instead of a translation.",
+  INCOMPLETE_PROVIDER_OUTPUT:
+    "The provider stopped before finishing the translation, for example at an output limit or a content filter.",
   API_KEY_UNCONFIGURED: "The selected provider API key is not configured.",
   PERMISSION_MISSING:
     "Access to the configured provider origin is not granted. Save the provider settings again.",
@@ -46,7 +50,34 @@ const RETRYABLE_ERROR_CODES: ReadonlySet<ErrorCode> = new Set([
   "REQUEST_TIMEOUT",
   "NETWORK_ERROR",
   "SERVER_UNAVAILABLE",
+  "UNTRANSLATED_OUTPUT",
 ]);
+
+// Transient provider failures: safe to retry automatically and to offer
+// segment-level Retry when a whole batch fails with one of them.
+const RECOVERABLE_PROVIDER_ERROR_CODES: ReadonlySet<ErrorCode> = new Set([
+  "RATE_LIMITED",
+  "REQUEST_TIMEOUT",
+  "NETWORK_ERROR",
+  "SERVER_UNAVAILABLE",
+]);
+
+// Failures that every further request would repeat until the user changes
+// provider settings.
+const CONFIGURATION_ERROR_CODES: ReadonlySet<ErrorCode> = new Set([
+  "API_KEY_UNCONFIGURED",
+  "AUTHENTICATION_FAILED",
+  "VALIDATION_ERROR",
+  "PERMISSION_MISSING",
+]);
+
+export function isRecoverableProviderErrorCode(code: ErrorCode): boolean {
+  return RECOVERABLE_PROVIDER_ERROR_CODES.has(code);
+}
+
+export function isConfigurationErrorCode(code: ErrorCode): boolean {
+  return CONFIGURATION_ERROR_CODES.has(code);
+}
 
 export interface StructuredError {
   code: ErrorCode;

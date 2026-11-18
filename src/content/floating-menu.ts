@@ -1,5 +1,10 @@
-import type { UiLocale } from "../localization";
+import { formatMessage, translateError, type UiLocale } from "../localization";
 import type { ContentCommand } from "../messaging/protocol";
+import {
+  isConfigurationErrorCode,
+  isErrorCode,
+  type ErrorCode,
+} from "../shared/errors";
 import type { TranslationProgress } from "./controller";
 
 export interface FloatingMenu {
@@ -12,38 +17,46 @@ export interface FloatingMenu {
 export interface FloatingMenuOptions {
   readonly siteLabel?: string;
   readonly disableSite?: () => Promise<void>;
+  readonly openSettings?: () => Promise<void>;
 }
 
-const labels = {
-  en: {
-    translate: "Translate page",
-    expand: "More translation controls",
-    toggle: "Show or hide translations",
-    clear: "Clear translations",
-    retryFailed: "Retry all failed",
-    hidePage: "Hide on this page",
-    disableSite: "Disable on this site",
-    siteControls: "Site controls",
-    ready: "Ready",
-    translating: "Translating",
-    complete: "Translation complete",
-    error: "Translation needs attention",
-  },
-  "zh-CN": {
-    translate: "翻译页面",
-    expand: "更多翻译控制",
-    toggle: "显示或隐藏译文",
-    clear: "清除译文",
-    retryFailed: "批量重试失败项",
-    hidePage: "在此页面隐藏",
-    disableSite: "在此网站停用",
-    siteControls: "网站控制",
-    ready: "准备就绪",
-    translating: "正在翻译",
-    complete: "翻译完成",
-    error: "翻译需要处理",
-  },
-} as const;
+// Only the validated error code is used; message text always comes from the
+// local catalog so no response-provided string reaches the page.
+function errorCodeFromResponse(response: unknown): ErrorCode | undefined {
+  if (
+    typeof response !== "object" ||
+    response === null ||
+    !("ok" in response) ||
+    response.ok !== false ||
+    !("error" in response) ||
+    typeof response.error !== "object" ||
+    response.error === null ||
+    !("code" in response.error)
+  ) {
+    return undefined;
+  }
+  return isErrorCode(response.error.code) ? response.error.code : undefined;
+}
+
+// Menu text lives in the shared localization catalog so the menu, page retry
+// UI, Popup, and Options always agree on wording and locale.
+function menuLabels(locale: UiLocale) {
+  return {
+    translate: formatMessage(locale, "menu.translate"),
+    expand: formatMessage(locale, "menu.expand"),
+    toggle: formatMessage(locale, "menu.toggle"),
+    clear: formatMessage(locale, "menu.clear"),
+    retryFailed: formatMessage(locale, "menu.retryFailed"),
+    hidePage: formatMessage(locale, "menu.hidePage"),
+    disableSite: formatMessage(locale, "menu.disableSite"),
+    siteControls: formatMessage(locale, "menu.siteControls"),
+    ready: formatMessage(locale, "menu.ready"),
+    translating: formatMessage(locale, "menu.translating"),
+    complete: formatMessage(locale, "menu.complete"),
+    error: formatMessage(locale, "menu.error"),
+    openSettings: formatMessage(locale, "menu.openSettings"),
+  };
+}
 
 export function installFloatingMenu(
   document: Document,
@@ -55,8 +68,11 @@ export function installFloatingMenu(
   host.setAttribute("data-paralume-owned", "true");
   host.style.cssText =
     "all:initial;position:fixed;right:0;top:42%;z-index:2147483646;display:block;";
-  const shadow = host.attachShadow({ mode: "open" });
-  const text = labels[locale];
+  // Closed so page scripts cannot reach, relabel, unhide, or focus the
+  // controls. This is defense in depth; the isTrusted check below is the
+  // primary guard against page-initiated (paid) actions.
+  const shadow = host.attachShadow({ mode: "closed" });
+  const text = menuLabels(locale);
   shadow.innerHTML = `
     <style>
       :host { color-scheme:light dark; --accent:#6757e8; --accent-strong:#5143c7; --surface:rgba(255,255,255,.96); --surface-soft:#f6f5fb; --text:#24232b; --muted:#73717d; --line:rgba(38,35,55,.11); }
@@ -78,6 +94,9 @@ export function installFloatingMenu(
       .title { margin:0; font-size:14px; font-weight:720; letter-spacing:-.01em; }
       .site { overflow:hidden; margin:2px 0 0; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
       .status { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 12px 12px; padding:10px 12px; border:1px solid rgba(103,87,232,.12); border-radius:12px; background:rgba(103,87,232,.07); color:#565263; font-size:12px; }
+      .notice { margin:-4px 12px 12px; padding:10px 12px; border:1px solid rgba(180,45,34,.2); border-radius:12px; background:rgba(180,45,34,.07); color:#8f2a20; font-size:12px; }
+      .notice-text { margin:0; }
+      .notice-action { margin-top:8px; padding:6px 10px; border:1px solid rgba(180,45,34,.28); border-radius:9px; background:var(--surface); font-size:12px; font-weight:630; }
       .progress { flex:none; color:var(--accent-strong); font-variant-numeric:tabular-nums; font-weight:700; }
       .actions { display:grid; grid-template-columns:1fr 1fr; gap:7px; padding:0 12px 12px; }
       .action { min-height:38px; padding:8px 10px; border:1px solid var(--line); border-radius:11px; background:var(--surface-soft); font-size:12px; font-weight:630; transition:background 140ms ease,border-color 140ms ease,transform 140ms ease; }
@@ -90,9 +109,9 @@ export function installFloatingMenu(
       .site-action:hover { background:rgba(45,42,58,.07); color:var(--text); }
       .site-action.danger:hover { background:#fff0ee; color:#a42b22; }
       @keyframes pulse { 50% { opacity:.35; transform:scale(.7); } }
-      @media (prefers-color-scheme:dark) { :host { --surface:rgba(29,28,35,.96); --surface-soft:#27262e; --text:#f4f3f7; --muted:#aaa7b3; --line:rgba(255,255,255,.11); } .handle:hover { background:#24222d; } .status { color:#c4c0cf; } .action:hover:not(:disabled) { background:#332f50; } .site-actions { background:rgba(22,21,27,.78); } .site-action.danger:hover { background:#402522; color:#ffb6ae; } }
+      @media (prefers-color-scheme:dark) { :host { --surface:rgba(29,28,35,.96); --surface-soft:#27262e; --text:#f4f3f7; --muted:#aaa7b3; --line:rgba(255,255,255,.11); } .handle:hover { background:#24222d; } .status { color:#c4c0cf; } .action:hover:not(:disabled) { background:#332f50; } .site-actions { background:rgba(22,21,27,.78); } .site-action.danger:hover { background:#402522; color:#ffb6ae; } .notice { color:#ffb6ae; } }
       @media (prefers-reduced-motion:reduce) { .handle,.action { transition:none; } [data-working="true"] .mark { animation:none; } }
-      @media (forced-colors:active) { .handle,.panel,.action,.status { forced-color-adjust:auto; border:1px solid ButtonText; } }
+      @media (forced-colors:active) { .handle,.panel,.action,.status,.notice,.notice-action { forced-color-adjust:auto; border:1px solid ButtonText; } }
     </style>
     <div class="dock" data-working="false">
       <button class="handle" data-action="expand" type="button" aria-label="${text.expand}" aria-expanded="false">
@@ -105,6 +124,10 @@ export function installFloatingMenu(
           <div class="heading"><p class="title">Paralume</p><p class="site">${options.siteLabel ?? ""}</p></div>
         </div>
         <p class="status" role="status"><span data-phase>${text.ready}</span><span class="progress" data-progress>0 / 0</span></p>
+        <div class="notice" data-error hidden>
+          <p class="notice-text" role="alert" data-error-text></p>
+          <button class="notice-action" data-action="open-settings" type="button" hidden>${text.openSettings}</button>
+        </div>
         <div class="actions">
           <button class="action primary" data-action="primary" type="button">${text.translate}</button>
           <button class="action" data-action="retry-failed" type="button" disabled>${text.retryFailed}</button>
@@ -123,53 +146,108 @@ export function installFloatingMenu(
   const expand = shadow.querySelector<HTMLButtonElement>(
     '[data-action="expand"]',
   );
-  const invoke = (command: ContentCommand): void => {
-    void runCommand(command).catch(() => undefined);
+  let activeLocale = locale;
+  let activeProgress: TranslationProgress = {
+    phase: "idle",
+    completed: 0,
+    total: 0,
   };
-  shadow
-    .querySelector('[data-action="primary"]')
-    ?.addEventListener("click", () => {
-      invoke("translate");
-    });
-  shadow
-    .querySelector('[data-action="retry-failed"]')
-    ?.addEventListener("click", () => {
-      invoke("retry-failed");
-    });
-  shadow
-    .querySelector('[data-action="toggle"]')
-    ?.addEventListener("click", () => {
-      invoke("toggle");
-    });
-  shadow
-    .querySelector('[data-action="clear"]')
-    ?.addEventListener("click", () => {
-      invoke("clear");
-    });
-  shadow
-    .querySelector('[data-action="hide-page"]')
-    ?.addEventListener("click", () => {
+  let activeErrorCode: ErrorCode | undefined;
+  let commandSequence = 0;
+  const renderError = (): void => {
+    const notice = shadow.querySelector<HTMLElement>("[data-error]");
+    const noticeText = shadow.querySelector<HTMLElement>("[data-error-text]");
+    const settingsButton = shadow.querySelector<HTMLButtonElement>(
+      '[data-action="open-settings"]',
+    );
+    notice?.toggleAttribute("hidden", activeErrorCode === undefined);
+    if (noticeText !== null) {
+      noticeText.textContent =
+        activeErrorCode === undefined
+          ? ""
+          : translateError(activeLocale, activeErrorCode);
+    }
+    if (settingsButton !== null) {
+      settingsButton.textContent = menuLabels(activeLocale).openSettings;
+      settingsButton.hidden =
+        activeErrorCode === undefined ||
+        options.openSettings === undefined ||
+        !isConfigurationErrorCode(activeErrorCode);
+    }
+  };
+  const setErrorCode = (code: ErrorCode | undefined): void => {
+    activeErrorCode = code;
+    renderError();
+  };
+  const invoke = (command: ContentCommand): void => {
+    // Only the latest command may report its outcome; a new command clears
+    // the previous error immediately.
+    commandSequence += 1;
+    const sequence = commandSequence;
+    setErrorCode(undefined);
+    void runCommand(command).then(
+      (response) => {
+        if (sequence === commandSequence) {
+          setErrorCode(errorCodeFromResponse(response));
+        }
+      },
+      () => {
+        if (sequence === commandSequence) {
+          setErrorCode("INTERNAL_ERROR");
+        }
+      },
+    );
+  };
+  // Page scripts share the DOM and can dispatch synthetic clicks that reach
+  // these isolated-world listeners. Only browser-generated input (pointer,
+  // keyboard, assistive technology) is trusted, and pages cannot forge it.
+  const onTrustedClick = (action: string, handler: () => void): void => {
+    shadow
+      .querySelector(`[data-action="${action}"]`)
+      ?.addEventListener("click", (event) => {
+        if (event.isTrusted) {
+          handler();
+        }
+      });
+  };
+  onTrustedClick("open-settings", () => {
+    const openSettings = options.openSettings;
+    if (openSettings !== undefined) {
+      void openSettings().catch(() => undefined);
+    }
+  });
+  onTrustedClick("primary", () => {
+    invoke("translate");
+  });
+  onTrustedClick("retry-failed", () => {
+    invoke("retry-failed");
+  });
+  onTrustedClick("toggle", () => {
+    invoke("toggle");
+  });
+  onTrustedClick("clear", () => {
+    invoke("clear");
+  });
+  onTrustedClick("hide-page", () => {
+    host.remove();
+  });
+  onTrustedClick("disable-site", () => {
+    const disableSite = options.disableSite;
+    if (disableSite === undefined) {
       host.remove();
-    });
-  shadow
-    .querySelector('[data-action="disable-site"]')
-    ?.addEventListener("click", () => {
-      const disableSite = options.disableSite;
-      if (disableSite === undefined) {
+      return;
+    }
+    void disableSite().then(
+      () => {
         host.remove();
-        return;
-      }
-      void disableSite().then(
-        () => {
-          host.remove();
-        },
-        () => undefined,
-      );
-    });
-  expand?.addEventListener("click", () => {
+      },
+      () => undefined,
+    );
+  });
+  onTrustedClick("expand", () => {
     const opening = panel?.hasAttribute("hidden") ?? false;
     panel?.toggleAttribute("hidden", !opening);
-    expand.setAttribute("aria-expanded", String(opening));
+    expand?.setAttribute("aria-expanded", String(opening));
   });
   document.addEventListener("pointerdown", (event) => {
     if (!event.composedPath().includes(host)) {
@@ -179,14 +257,8 @@ export function installFloatingMenu(
   });
   document.documentElement.append(host);
 
-  let activeLocale = locale;
-  let activeProgress: TranslationProgress = {
-    phase: "idle",
-    completed: 0,
-    total: 0,
-  };
   const updateText = (): void => {
-    const activeLabels = labels[activeLocale];
+    const activeLabels = menuLabels(activeLocale);
     const status = shadow.querySelector<HTMLElement>("[data-phase]");
     const progress = shadow.querySelector<HTMLElement>("[data-progress]");
     const phaseText =
@@ -253,10 +325,15 @@ export function installFloatingMenu(
     setLocale(nextLocale) {
       activeLocale = nextLocale;
       updateText();
+      renderError();
     },
     setProgress(progress) {
       activeProgress = progress;
       updateText();
+      // A new operation (from any entry point) or Clear supersedes the error.
+      if (progress.phase === "translating" || progress.phase === "idle") {
+        setErrorCode(undefined);
+      }
       dock?.setAttribute(
         "data-working",
         String(progress.phase === "translating"),

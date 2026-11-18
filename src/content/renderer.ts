@@ -250,8 +250,16 @@ function renderFailure(
   button.style.cursor = "pointer";
   button.style.opacity = "0.72";
 
-  const listener = () => {
-    if (!button.disabled) {
+  // The source may sit inside a link or clickable card (`<a><h3>`), which
+  // places this button inside it too. A Retry click belongs to Paralume only:
+  // cancel the ancestor link's default navigation and keep page/framework
+  // click handlers from treating it as a card click.
+  // The button lives in the page DOM, so page scripts can call .click() on
+  // it. Only trusted user input may start a (paid) provider request.
+  const listener = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.isTrusted && !button.disabled) {
       onRetry();
     }
   };

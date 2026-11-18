@@ -9,7 +9,13 @@ export type TranslationFetch = (
 
 export interface HttpProviderDependencies {
   fetch?: TranslationFetch;
+  /**
+   * JSON requests: total request timeout. Streaming (SSE) requests: idle
+   * timeout, reset whenever response headers or body bytes arrive.
+   */
   timeoutMs?: number;
+  /** Absolute cap for a streaming (SSE) request, regardless of activity. */
+  streamMaxDurationMs?: number;
   now?: () => number;
 }
 

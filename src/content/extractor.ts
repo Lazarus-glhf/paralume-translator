@@ -3,7 +3,11 @@ import { invalidateSourceTranslation } from "./cleanup";
 import { CANDIDATE_BLOCK_SELECTOR } from "./constants";
 import { isEligibleCandidate } from "./eligibility";
 import type { ContentRuntimeState } from "./state";
-import { getCurrentSourceText, getReadableText } from "./text";
+import {
+  getCurrentSourceText,
+  getReadableText,
+  isCompoundStructuralContainer,
+} from "./text";
 
 export interface ExtractedSegment {
   element: HTMLElement;
@@ -68,30 +72,38 @@ export function extractSegments(
   const eligible = Array.from(
     root.querySelectorAll(CANDIDATE_BLOCK_SELECTOR),
   ).filter((element) => isEligibleCandidate(element, state));
-  const structuralCandidates = new Set(eligible.filter(isStructuralContainer));
-  const eligibleSet = new Set(eligible);
-  const candidatesWithEligibleDescendants = new Set<HTMLElement>();
-  for (const candidate of eligible) {
-    for (
-      let ancestor = candidate.parentElement;
-      ancestor !== null;
-      ancestor = ancestor.parentElement
-    ) {
-      if (eligibleSet.has(ancestor)) {
-        candidatesWithEligibleDescendants.add(ancestor);
+  // Merged list items/cells own their nested blocks. Compound ones (nested
+  // lists/tables, code blocks, or several readable blocks) let nested blocks
+  // stand alone and keep only their loose text, so layout tables and nested
+  // lists do not collapse into one oversized segment.
+  const structuralCandidates = new Set(
+    eligible.filter(
+      (candidate) =>
+        isStructuralContainer(candidate) &&
+        !isCompoundStructuralContainer(candidate, state),
+    ),
+  );
+  // Any other eligible candidate is selected: its text excludes every nested
+  // block that is translated on its own (an eligible nested block always has
+  // meaningful text, so it is split out), so a container with its own loose
+  // text is translated without duplicating or dropping nested text.
+  const selected = eligible.filter(
+    (candidate) => !hasStructuralAncestor(candidate, structuralCandidates),
+  );
+  // A merged list item/cell about to be translated now owns its nested
+  // blocks. One that was compound before (for example until the page removed
+  // a sibling block) may still have translations rendered for nested blocks;
+  // drop them so that text is not shown twice.
+  for (const owner of selected) {
+    if (!structuralCandidates.has(owner)) {
+      continue;
+    }
+    for (const source of Array.from(state.sourceMarkers.keys())) {
+      if (source !== owner && owner.contains(source)) {
+        invalidateSourceTranslation(source, state);
       }
     }
   }
-  const selected = eligible.filter((candidate) => {
-    if (hasStructuralAncestor(candidate, structuralCandidates)) {
-      return false;
-    }
-
-    return (
-      isStructuralContainer(candidate) ||
-      !candidatesWithEligibleDescendants.has(candidate)
-    );
-  });
 
   return selected
     .map((element, index) => ({ element, index }))
@@ -101,7 +113,7 @@ export function extractSegments(
         first.index - second.index,
     )
     .map(({ element }): ExtractedSegment => {
-      const text = getReadableText(element);
+      const text = getReadableText(element, state);
 
       return {
         element,

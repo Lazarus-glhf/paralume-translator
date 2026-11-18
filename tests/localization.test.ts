@@ -12,6 +12,13 @@ describe("UI locale resolution", () => {
     ["zh-CN", "en-US", "zh-CN"],
     ["system", "zh-CN", "zh-CN"],
     ["system", "zh-Hans-CN", "zh-CN"],
+    ["system", "zh", "zh-CN"],
+    ["system", "zh-SG", "zh-CN"],
+    // Traditional Chinese has no catalog; fall back to English rather than
+    // showing Simplified Chinese.
+    ["system", "zh-TW", "en"],
+    ["system", "zh-HK", "en"],
+    ["system", "zh-Hant-TW", "en"],
     ["system", "en-GB", "en"],
     ["system", "fr-FR", "en"],
     ["system", undefined, "en"],

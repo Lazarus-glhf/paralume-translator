@@ -5,8 +5,8 @@
 Paralume（并译）是一款面向 Chrome 和 Edge 的开源、本地优先双语网页翻译扩展。
 它保留原始网页，并把译文插入对应原文旁边，让两种语言在同一页面并行阅读。
 
-`0.1.0` 新增默认显示的页内悬浮控制、紧凑的边缘停靠形态、准确的页面级进度、
-按网站控制显示状态，以及新的 Parallel P 扩展图标。翻译仍然只会在用户明确点击
+`0.1.1` 改进翻译重试、流式结束处理、隐藏内容过滤、嵌套文本提取、页面进度和
+失败恢复，并加强密钥访问限制及页面合成点击防护。翻译只会在用户明确点击
 **“翻译页面”**后开始。
 
 ## 主要功能
@@ -25,10 +25,10 @@ Paralume（并译）是一款面向 Chrome 和 Edge 的开源、本地优先双�
 ## 从 GitHub Releases 安装
 
 1. 打开 [GitHub Releases](https://github.com/Lazarus-glhf/paralume-translator/releases)，
-   选择 `v0.1.0`。
-2. 下载 `paralume-translator-0.1.0-chrome.zip` 或
-   `paralume-translator-0.1.0-edge.zip`，同时下载
-   `paralume-translator-0.1.0-SHA256SUMS.txt`。
+   选择 `v0.1.1`。
+2. 下载 `paralume-translator-0.1.1-chrome.zip` 或
+   `paralume-translator-0.1.1-edge.zip`，同时下载
+   `paralume-translator-0.1.1-SHA256SUMS.txt`。
 3. 使用 `sha256sum`、`shasum -a 256` 或 PowerShell
    `Get-FileHash -Algorithm SHA256` 验证 ZIP 校验值。
 4. 将 ZIP 解压到固定的本地目录。
@@ -57,6 +57,9 @@ Paralume 使用 BYOK 模式：
 
 - **OpenAI 兼容服务**：支持 Responses（`/responses`）和 Chat Completions
   （`/chat/completions`），使用用户配置的 HTTPS 端点和严格结构化输出。
+  Responses 请求会发送 `store: false`，要求服务商不保存响应，但不能排除服务端
+  另行记录日志。模型或兼容端点不接受推理参数时，可把推理强度设为“不发送”。
+  “测试已保存的服务”使用与页面翻译相同的流式请求。
 - **Microsoft Translator**：支持配置 HTTPS 端点、API Key 和 Region，调用
   Translator v3。
 - **Mock**：仅在显式选择时产生确定性的开发输出。
@@ -64,6 +67,14 @@ Paralume 使用 BYOK 模式：
 API 密钥存储于当前浏览器配置文件的 `chrome.storage.local`。该存储**不是加密
 保险库**。建议使用用途受限的密钥，并配置服务商额度或账单限制。“选项”页面只
 接收 `apiKeyConfigured` 状态；内容脚本永远不会收到服务密钥。
+
+- 只有 Paralume 自己的扩展页面（选项页、弹窗）可以读取服务设置、保存设置或密钥、
+  清除密钥和测试连接。后台根据浏览器提供的消息发送方信息拒绝来自内容脚本的这些命令。
+- 已保存的密钥与端点的源（origin）绑定。将 Base URL 或 Endpoint 改到不同的源且
+  未输入新密钥时，旧密钥会被移除，不会发送到新服务器。
+- 后台会请求浏览器把 `chrome.storage.local` 限制为仅扩展可信上下文可访问
+  （`setAccessLevel`），内容脚本通过后台消息读取网站停用列表。不支持该限制的浏览器
+  中，内容脚本仍可直接读取 `storage.local`；渲染进程被攻破时应视为可以读取。
 
 ## 安全模型
 
@@ -84,8 +95,8 @@ Manifest V3 扩展请求：
 - `host_permissions`：`http://*/*` 和 `https://*/*`。这是在普通网页默认显示悬浮窗，
   以及访问用户配置的 HTTPS 翻译服务所必需的权限。
 
-唯一的静态内容脚本会在 HTTP/HTTPS 页面 `document_idle` 时运行。它先检查本地的
-网站停用列表，再安装 Shadow DOM 隔离的悬浮控制。浏览器内部页不会注册内容脚本。
+唯一的静态内容脚本会在 HTTP/HTTPS 页面 `document_idle` 时运行。它先向后台查询
+当前网站是否已停用，再安装 Shadow DOM 隔离的悬浮控制。浏览器内部页不会注册内容脚本。
 
 ## 架构
 

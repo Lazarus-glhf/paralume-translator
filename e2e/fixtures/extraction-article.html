@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Paralume extraction boundary fixture</title>
+  </head>
+  <body>
+    <!-- prettier-ignore -->
+    <main>
+      <p id="mixed-paragraph">Visible paragraph keeps its readable words <script>window.extractionScriptSecret = "SCRIPT_SECRET_TEXT";</script><style>.STYLE_SECRET_TEXT { color: red; }</style><span hidden>HIDDEN_ATTRIBUTE_SECRET</span><span style="display: none">DISPLAY_NONE_SECRET</span><span style="visibility: hidden">VISIBILITY_SECRET <em style="visibility: visible">plus visible emphasis</em></span><span aria-hidden="true">ARIA_HIDDEN_SECRET</span><button type="button">BUTTON_SECRET</button> and a normal ending.</p>
+
+      <ul>
+        <li id="glued-item"><div>First glued sentence.</div><div>Second glued sentence.</div></li>
+        <li id="simple-item"><p>Simple item with one nested paragraph</p></li>
+        <li id="outer-item">Outer list item introduction text
+          <ul>
+            <li id="inner-item-one">Inner list item number one</li>
+            <li id="inner-item-two">Inner list item number two</li>
+          </ul>
+        </li>
+        <li id="code-item">List item explaining the snippet below<pre id="code-item-pre">const snippet = "kept apart";</pre></li>
+      </ul>
+
+      <section style="content-visibility: hidden">
+        <p id="cv-ancestor-hidden">CV_ANCESTOR_SECRET recovery phrase paragraph</p>
+      </section>
+      <p id="cv-self-hidden" style="content-visibility: hidden">CV_SELF_SECRET paragraph <em id="cv-self-probe">text</em></p>
+      <p id="cv-mixed">Visible content-visibility sentence <span style="display: inline-block; content-visibility: hidden"><em id="cv-skipped-probe">CV_DESCENDANT_SECRET</em></span><span style="content-visibility: hidden"><em id="cv-inline-probe">still rendered inline</em></span> ends here.</p>
+      <p id="cv-auto" style="content-visibility: auto">Deferred but readable paragraph</p>
+
+      <ul>
+        <li id="short-nested-item"><p>Step one opens the settings page</p><p>Done.</p></li>
+      </ul>
+      <blockquote id="loose-quote">Quote introduction loose text <p id="loose-quoted">Quoted paragraph text here</p></blockquote>
+
+      <table id="layout-table">
+        <tbody>
+          <tr>
+            <td id="layout-cell">
+              <table>
+                <tbody>
+                  <tr><td id="story-title">Layout table story title text</td></tr>
+                  <tr><td id="story-meta">Layout table story metadata line</td></tr>
+                </tbody>
+              </table>
+              <p id="layout-paragraph-one">Layout cell paragraph number one.</p>
+              <p id="layout-paragraph-two">Layout cell paragraph number two.</p>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

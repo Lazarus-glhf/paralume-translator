@@ -310,6 +310,9 @@ export function App({
                     }));
                   }}
                 >
+                  <option value="omit">
+                    {formatMessage(locale, "options.reasoningOmit")}
+                  </option>
                   <option value="none">
                     {formatMessage(locale, "options.reasoningNone")}
                   </option>

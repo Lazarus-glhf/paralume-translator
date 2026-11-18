@@ -1,28 +1,18 @@
+import {
+  createDisableSiteMessage,
+  createGetSiteStateMessage,
+  parseDisableSiteResponse,
+  parseSiteStateResponse,
+} from "../messaging/settings-protocol";
+import { siteKeyFromUrl } from "../settings/site-preferences";
+import { UserFacingError } from "../shared/errors";
 import { installContentRuntime } from "./runtime";
 
-export const DISABLED_SITES_STORAGE_KEY = "disabledFloatingMenuSites";
-
+// Content scripts do not touch chrome.storage directly: the background keeps
+// storage.local restricted to trusted contexts and owns the site preference.
 export interface ContentBootstrapBrowser {
   runtime: Parameters<typeof installContentRuntime>[0]["runtime"];
-  storage: {
-    local: {
-      get(key: string): Promise<Record<string, unknown>>;
-      set(items: Record<string, unknown>): Promise<void>;
-    };
-  };
   getUiLanguage(): string | undefined;
-}
-
-function siteKey(location: Location): string | undefined {
-  return location.protocol === "file:"
-    ? "file://"
-    : location.hostname || undefined;
-}
-
-function parseDisabledSites(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 export async function bootstrapContentRuntime(
@@ -31,11 +21,15 @@ export async function bootstrapContentRuntime(
   globalObject: Record<string, unknown>,
   api: ContentBootstrapBrowser,
 ): Promise<boolean> {
-  const key = siteKey(location);
+  const key = siteKeyFromUrl(location.href);
   if (key === undefined) return false;
 
-  const stored = await api.storage.local.get(DISABLED_SITES_STORAGE_KEY);
-  if (parseDisabledSites(stored[DISABLED_SITES_STORAGE_KEY]).includes(key)) {
+  const state = parseSiteStateResponse(
+    await api.runtime.sendMessage(createGetSiteStateMessage()),
+  );
+  // Fail closed: without a valid answer the menu stays off, as it did when
+  // the stored preference could not be read.
+  if (!state.ok || !state.value.ok || state.value.siteDisabled) {
     return false;
   }
 
@@ -46,14 +40,15 @@ export async function bootstrapContentRuntime(
     getBrowserUiLanguage: () => api.getUiLanguage(),
     siteLabel: key,
     async disableSite() {
-      const latest = await api.storage.local.get(DISABLED_SITES_STORAGE_KEY);
-      const disabled = new Set(
-        parseDisabledSites(latest[DISABLED_SITES_STORAGE_KEY]),
+      const parsed = parseDisableSiteResponse(
+        await api.runtime.sendMessage(createDisableSiteMessage()),
       );
-      disabled.add(key);
-      await api.storage.local.set({
-        [DISABLED_SITES_STORAGE_KEY]: Array.from(disabled).sort(),
-      });
+      if (!parsed.ok) {
+        throw new UserFacingError(parsed.error.code);
+      }
+      if (!parsed.value.ok) {
+        throw new UserFacingError(parsed.value.error.code);
+      }
     },
   });
 }

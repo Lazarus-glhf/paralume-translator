@@ -21,6 +21,8 @@ import {
 import type { ContentSettings } from "../settings/types";
 import {
   createError,
+  isConfigurationErrorCode,
+  isRecoverableProviderErrorCode,
   sanitizeError,
   type StructuredError,
 } from "../shared/errors";
@@ -36,7 +38,7 @@ import type {
   TranslationResult,
 } from "../shared/types";
 import { DEFAULT_BATCH_LIMITS, type BatchLimits } from "../translation/batcher";
-import { clearTranslations } from "./cleanup";
+import { clearTranslations, invalidateSourceTranslation } from "./cleanup";
 import { getCurrentSourceText } from "./text";
 import { extractSegments, type ExtractedSegment } from "./extractor";
 import {
@@ -287,6 +289,25 @@ export function createContentController(
         : {}),
     });
 
+  const isSourceCurrent = (extracted: ExtractedSegment): boolean =>
+    extracted.element.isConnected &&
+    dependencies.document.contains(extracted.element) &&
+    getCurrentSourceText(extracted.element, dependencies.state) ===
+      extracted.segment.text;
+
+  // A failure rendered for source text that has since changed (or a source
+  // that left the document) can never be resolved by retrying the old text.
+  // Drop it, as the next extraction would, instead of leaving a Retry control
+  // stuck in its pending state.
+  const discardStaleTranslation = (
+    element: HTMLElement,
+    translation: HTMLElement,
+  ): void => {
+    if (dependencies.state.translationsBySource.get(element) === translation) {
+      invalidateSourceTranslation(element, dependencies.state);
+    }
+  };
+
   const performManualRetry = async (
     extracted: ExtractedSegment,
     generation: number,
@@ -301,12 +322,20 @@ export function createContentController(
     ) {
       return;
     }
+    if (!isSourceCurrent(extracted)) {
+      discardStaleTranslation(extracted.element, existing);
+      return;
+    }
     setTranslationPending(existing, dependencies.state, true, locale);
 
     const settingsRefresh = refreshSettings(generation);
     const settingsReady =
       settingsRefresh === true ? true : await settingsRefresh;
     if (!settingsReady || generation !== operationGeneration) {
+      return;
+    }
+    if (!isSourceCurrent(extracted)) {
+      discardStaleTranslation(extracted.element, existing);
       return;
     }
     setTranslationPending(existing, dependencies.state, true, locale);
@@ -331,6 +360,10 @@ export function createContentController(
         result = failureFromError(extracted.segment, parsed.error);
       } else if (!parsed.value.ok) {
         result = failureFromError(extracted.segment, parsed.value.error);
+        // A transient whole-request failure keeps the segment retryable.
+        allowManualRetry = isRecoverableProviderErrorCode(
+          parsed.value.error.code,
+        );
       } else {
         result =
           mapResultsById(request.segments, parsed.value.results).get(
@@ -346,15 +379,17 @@ export function createContentController(
         extracted.segment,
         sanitizeError(error, "TRANSLATION_FAILED"),
       );
+      // The request never produced a provider verdict (for example the
+      // extension messaging channel was briefly unavailable), so trying the
+      // same segment again stays possible.
+      allowManualRetry = true;
     }
 
-    if (
-      generation !== operationGeneration ||
-      !extracted.element.isConnected ||
-      !dependencies.document.contains(extracted.element) ||
-      getCurrentSourceText(extracted.element, dependencies.state) !==
-        extracted.segment.text
-    ) {
+    if (generation !== operationGeneration) {
+      return;
+    }
+    if (!isSourceCurrent(extracted)) {
+      discardStaleTranslation(extracted.element, existing);
       return;
     }
     const visible = getContentState(
@@ -464,7 +499,75 @@ export function createContentController(
       let failed = 0;
       let stale = 0;
       let firstError: ContentResponse | undefined;
+      // Set by a configuration failure; later batches would fail identically,
+      // so no further batches are dispatched once it is set.
+      let configurationError: ContentResponse | undefined;
       let nextBatchIndex = 0;
+      const reportRendered = (segmentId: string): void => {
+        if (liveProgress?.generation === generation) {
+          liveProgress.completedIds.add(segmentId);
+        }
+        dependencies.onProgress?.({
+          phase: "translating",
+          completed:
+            liveProgress?.generation === generation
+              ? liveProgress.completedIds.size
+              : succeeded + failed + stale,
+          total:
+            liveProgress?.generation === generation
+              ? liveProgress.total
+              : extracted.length,
+        });
+      };
+      const handleBatchError = (
+        batch: readonly ExtractedSegment[],
+        error: StructuredError,
+      ): void => {
+        const response = createErrorResponse(error);
+        if (isConfigurationErrorCode(error.code)) {
+          configurationError ??= response;
+          return;
+        }
+        firstError ??= response;
+        if (!isRecoverableProviderErrorCode(error.code)) {
+          return;
+        }
+        // Transient whole-batch failure: render each unfinished segment as a
+        // failure so manual Retry and "Retry all failed" can reach it.
+        const visible = getContentState(
+          dependencies.document,
+          dependencies.state,
+        ).visible;
+        for (const item of batch) {
+          if (
+            (liveProgress?.generation === generation &&
+              liveProgress.completedIds.has(item.segment.id)) ||
+            !item.element.isConnected ||
+            !dependencies.document.contains(item.element) ||
+            getCurrentSourceText(item.element, dependencies.state) !==
+              item.segment.text
+          ) {
+            continue;
+          }
+          const existing = dependencies.state.translationsBySource.get(
+            item.element,
+          );
+          if (
+            existing !== undefined &&
+            dependencies.state.translationStatuses.get(existing) === "success"
+          ) {
+            continue;
+          }
+          renderResult(
+            item,
+            failureFromError(item.segment, error),
+            visible,
+            true,
+          );
+          failed += 1;
+          reportRendered(item.segment.id);
+        }
+      };
       let reservedOperationId = operationIds.values().next().value;
       const takeOperationId = (): string => {
         if (reservedOperationId !== undefined) {
@@ -480,7 +583,11 @@ export function createContentController(
         for (;;) {
           const batch = batches[nextBatchIndex];
           nextBatchIndex += 1;
-          if (batch === undefined || generation !== operationGeneration) {
+          if (
+            batch === undefined ||
+            generation !== operationGeneration ||
+            configurationError !== undefined
+          ) {
             return;
           }
 
@@ -504,9 +611,7 @@ export function createContentController(
             if (generation !== operationGeneration) {
               return;
             }
-            firstError ??= createErrorResponse(
-              sanitizeError(error, "TRANSLATION_FAILED"),
-            );
+            handleBatchError(batch, sanitizeError(error, "TRANSLATION_FAILED"));
             continue;
           } finally {
             operationIds.delete(operationId);
@@ -518,11 +623,11 @@ export function createContentController(
 
           const parsed = parseTranslationResponse(rawResponse);
           if (!parsed.ok) {
-            firstError ??= createErrorResponse(parsed.error);
+            handleBatchError(batch, parsed.error);
             continue;
           }
           if (!parsed.value.ok) {
-            firstError ??= parsed.value;
+            handleBatchError(batch, parsed.value.error);
             continue;
           }
 
@@ -568,20 +673,7 @@ export function createContentController(
             } else {
               succeeded += 1;
             }
-            if (liveProgress?.generation === generation) {
-              liveProgress.completedIds.add(item.segment.id);
-            }
-            dependencies.onProgress?.({
-              phase: "translating",
-              completed:
-                liveProgress?.generation === generation
-                  ? liveProgress.completedIds.size
-                  : succeeded + failed + stale,
-              total:
-                liveProgress?.generation === generation
-                  ? liveProgress.total
-                  : extracted.length,
-            });
+            reportRendered(item.segment.id);
           }
         }
       };
@@ -600,19 +692,29 @@ export function createContentController(
       if (generation !== operationGeneration) {
         return cancelled();
       }
-      if (firstError !== undefined) {
+      // Segments rendered from streamed results of a batch that later failed
+      // are in the live count but not in the per-batch tallies; the terminal
+      // progress must not drop below what was already shown.
+      const finished = Math.max(
+        succeeded + failed + stale,
+        liveProgress.generation === generation
+          ? liveProgress.completedIds.size
+          : 0,
+      );
+      const terminalError = configurationError ?? firstError;
+      if (terminalError !== undefined) {
         dependencies.onProgress?.({
           phase: "error",
-          completed: succeeded + failed + stale,
+          completed: finished,
           total: extracted.length,
         });
-        return firstError;
+        return terminalError;
       }
 
       const omitted = pageOmitted + stale;
       dependencies.onProgress?.({
         phase: "complete",
-        completed: succeeded + failed + stale,
+        completed: finished,
         total: extracted.length,
       });
       return success(
@@ -676,7 +778,7 @@ export function createContentController(
     }
     const failed: (ExtractedSegment & { readonly translation: HTMLElement })[] =
       [];
-    for (const translation of dependencies.state.translations) {
+    for (const translation of Array.from(dependencies.state.translations)) {
       if (
         dependencies.state.translationStatuses.get(translation) !== "failure"
       ) {
@@ -684,12 +786,16 @@ export function createContentController(
       }
       const element = dependencies.state.sourcesByTranslation.get(translation);
       const marker = element && dependencies.state.sourceMarkers.get(element);
+      if (element === undefined || marker === undefined) {
+        continue;
+      }
       if (
-        element === undefined ||
-        marker === undefined ||
-        !element.isConnected ||
-        getCurrentSourceText(element, dependencies.state) !== marker.sourceText
+        !isSourceCurrent({
+          element,
+          segment: { id: marker.segmentId, text: marker.sourceText },
+        })
       ) {
+        discardStaleTranslation(element, translation);
         continue;
       }
       failed.push({
@@ -769,18 +875,27 @@ export function createContentController(
         ).visible;
         for (const item of failed) {
           const result = byId.get(item.segment.id);
-          if (
-            result !== undefined &&
+          const owned =
             dependencies.state.translationsBySource.get(item.element) ===
               item.translation &&
-            dependencies.state.translationStatuses.get(item.translation) ===
-              "failure" &&
             dependencies.state.sourceMarkers.get(item.element)?.segmentId ===
-              item.segment.id &&
-            getCurrentSourceText(item.element, dependencies.state) ===
-              item.segment.text
+              item.segment.id;
+          if (owned && !isSourceCurrent(item)) {
+            discardStaleTranslation(item.element, item.translation);
+          } else if (
+            result !== undefined &&
+            owned &&
+            dependencies.state.translationStatuses.get(item.translation) ===
+              "failure"
           ) {
             renderResult(item, result, visible, result.status === "failure");
+          } else {
+            setTranslationPending(
+              item.translation,
+              dependencies.state,
+              false,
+              locale,
+            );
           }
         }
         dependencies.onProgress?.({
@@ -796,6 +911,9 @@ export function createContentController(
         );
       })
       .catch((error: unknown) => {
+        // Clear already reset progress and removed these failures; a late
+        // rejection from the cancelled request must not report an error.
+        if (generation !== operationGeneration) return cancelled();
         for (const item of failed) {
           setTranslationPending(
             item.translation,

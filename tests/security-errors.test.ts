@@ -167,8 +167,11 @@ describe("safe cross-runtime errors", () => {
       save: vi.fn(() => Promise.reject(hostileError())),
       clearApiKey: vi.fn(() => Promise.reject(hostileError())),
     };
-    const handle = createSettingsMessageHandler(repository, () =>
-      Promise.reject(hostileError()),
+    const handle = createSettingsMessageHandler(
+      repository,
+      () => Promise.reject(hostileError()),
+      // Authorized sender, so the repository failure path is exercised.
+      { isExtensionPageSender: () => true },
     );
     const response = await handle({
       protocolVersion: 1,
@@ -176,6 +179,7 @@ describe("safe cross-runtime errors", () => {
       command: "clear-api-key",
       provider: "openai",
     });
+    expect(repository.clearApiKey).toHaveBeenCalledOnce();
 
     expect(response).toMatchObject({
       ok: false,

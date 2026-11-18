@@ -6,8 +6,10 @@ export interface PageRequestLimits {
 }
 
 export const DEFAULT_PAGE_REQUEST_LIMITS: PageRequestLimits = {
-  maxSegments: 200,
-  maxCharacters: 50_000,
+  // Whole-page safety ceiling. Provider calls are still split according to
+  // the much smaller limits in translation/batcher.ts.
+  maxSegments: 10_000,
+  maxCharacters: 5_000_000,
 };
 
 export function assertPageRequestLimits(limits: PageRequestLimits): void {

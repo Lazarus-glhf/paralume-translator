@@ -28,6 +28,7 @@ const OPENAI_PROTOCOLS: ReadonlySet<OpenAiProtocol> = new Set([
   "chat-completions",
 ]);
 const REASONING_EFFORTS: ReadonlySet<OpenAiReasoningEffort> = new Set([
+  "omit",
   "none",
   "minimal",
   "low",

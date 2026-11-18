@@ -30,6 +30,45 @@ export interface SettingsStorageArea {
   set(items: Record<string, unknown>): Promise<void>;
 }
 
+export interface SaveSettingsResult {
+  readonly settings: ProviderSettings;
+  // Providers whose stored key was dropped because the endpoint origin
+  // changed and no replacement key was supplied.
+  readonly removedApiKeys: readonly Exclude<ProviderId, "mock">[];
+}
+
+export interface StorageAccessLevelArea {
+  setAccessLevel?: (options: {
+    accessLevel: "TRUSTED_CONTEXTS";
+  }) => Promise<void>;
+}
+
+// storage.local defaults to also being readable by content scripts. Limit it
+// to extension pages and the service worker so page-injected code has no
+// storage path to API keys. Returns false when the browser does not support
+// or rejects the restriction; callers must not depend on it for correctness.
+export async function restrictStorageToTrustedContexts(
+  area: StorageAccessLevelArea,
+): Promise<boolean> {
+  if (typeof area.setAccessLevel !== "function") {
+    return false;
+  }
+  try {
+    await area.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sameOrigin(previous: string, next: string): boolean {
+  try {
+    return new URL(previous).origin === new URL(next).origin;
+  } catch {
+    return false;
+  }
+}
+
 function toPublicSettings(settings: ProviderSettings): PublicProviderSettings {
   const { apiKey: openaiApiKey, ...openai } = settings.openai;
   const { apiKey: microsoftApiKey, ...microsoft } = settings.microsoft;
@@ -72,12 +111,36 @@ export function createSettingsRepository(storage: SettingsStorageArea) {
   async function save(
     draft: ProviderSettingsDraft,
     replacements: ApiKeyReplacements,
-  ): Promise<ProviderSettings> {
+  ): Promise<SaveSettingsResult> {
     const current = await load();
     const validated = validateProviderSettingsDraft(draft);
-    const openaiApiKey = replacements.openaiApiKey ?? current.openai.apiKey;
+    // A saved key is bound to the origin it was entered for. Moving the
+    // endpoint to another origin without a new key must not forward the old
+    // key there, so the old key is dropped and the user enters it again.
+    const keepOpenAiKey = sameOrigin(
+      current.openai.baseUrl,
+      validated.openai.baseUrl,
+    );
+    const keepMicrosoftKey = sameOrigin(
+      current.microsoft.endpoint,
+      validated.microsoft.endpoint,
+    );
+    const openaiApiKey =
+      replacements.openaiApiKey ??
+      (keepOpenAiKey ? current.openai.apiKey : undefined);
     const microsoftApiKey =
-      replacements.microsoftApiKey ?? current.microsoft.apiKey;
+      replacements.microsoftApiKey ??
+      (keepMicrosoftKey ? current.microsoft.apiKey : undefined);
+    const removedApiKeys: Exclude<ProviderId, "mock">[] = [];
+    if (current.openai.apiKey !== undefined && openaiApiKey === undefined) {
+      removedApiKeys.push("openai");
+    }
+    if (
+      current.microsoft.apiKey !== undefined &&
+      microsoftApiKey === undefined
+    ) {
+      removedApiKeys.push("microsoft");
+    }
     const next: ProviderSettings = {
       ...validated,
       openai:
@@ -91,7 +154,7 @@ export function createSettingsRepository(storage: SettingsStorageArea) {
     };
 
     await storage.set({ [SETTINGS_STORAGE_KEY]: next });
-    return next;
+    return { settings: next, removedApiKeys };
   }
 
   async function loadPublic(): Promise<PublicProviderSettings> {

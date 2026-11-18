@@ -1,5 +1,59 @@
 import type { TranslationRequest, TranslationResult } from "../shared/types";
-import { UserFacingError } from "../shared/errors";
+import { createError, UserFacingError } from "../shared/errors";
+
+const LONG_UNTRANSLATED_TEXT_LENGTH = 80;
+const MIN_WORDS_FOR_UNTRANSLATED_CHECK = 8;
+const MIN_LOWERCASE_WORDS_FOR_CASED_TEXT = 4;
+
+function normalizedTranslationText(value: string): string {
+  return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
+function isUntranslatedOutput(
+  sourceText: string,
+  translatedText: string,
+  targetLanguage: string,
+): boolean {
+  if (!targetLanguage.toLowerCase().startsWith("zh")) return false;
+  const normalizedSource = normalizedTranslationText(sourceText);
+  if (
+    normalizedSource.length < LONG_UNTRANSLATED_TEXT_LENGTH ||
+    normalizedSource !== normalizedTranslationText(translatedText)
+  ) {
+    return false;
+  }
+  const words = normalizedSource.match(/[\p{L}]+(?:['’-][\p{L}]+)*/gu) ?? [];
+  const cjkCharacters = normalizedSource.match(/[\p{Script=Han}]/gu);
+  if (
+    words.length < MIN_WORDS_FOR_UNTRANSLATED_CHECK ||
+    (cjkCharacters?.length ?? 0) >= 4
+  ) {
+    return false;
+  }
+  const casedWords = words.filter(
+    (word) => word.toLowerCase() !== word.toUpperCase(),
+  );
+  if (casedWords.length === 0) return true;
+  const lowercaseWords = casedWords.filter((word) => {
+    const firstCharacter = Array.from(word)[0];
+    return (
+      firstCharacter !== undefined &&
+      word.startsWith(firstCharacter.toLowerCase())
+    );
+  });
+  return lowercaseWords.length >= MIN_LOWERCASE_WORDS_FOR_CASED_TEXT;
+}
+
+export function createValidatedTranslationResult(
+  id: string,
+  sourceText: string,
+  translatedText: string,
+  targetLanguage: string,
+): TranslationResult {
+  return isUntranslatedOutput(sourceText, translatedText, targetLanguage)
+    ? { id, status: "failure", error: createError("UNTRANSLATED_OUTPUT") }
+    : { id, status: "success", translatedText };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -58,7 +112,12 @@ function parseLegacyStructuredTranslations(
     if (translatedText === undefined) {
       throw new UserFacingError("MALFORMED_PROVIDER_OUTPUT");
     }
-    return { id: segment.id, status: "success", translatedText };
+    return createValidatedTranslationResult(
+      segment.id,
+      segment.text,
+      translatedText,
+      request.targetLanguage,
+    );
   });
 }
 
@@ -114,7 +173,12 @@ export function parseCompactStructuredTranslations(
     if (translatedText === undefined) {
       throw new UserFacingError("MALFORMED_PROVIDER_OUTPUT");
     }
-    return { id: segment.id, status: "success", translatedText };
+    return createValidatedTranslationResult(
+      segment.id,
+      segment.text,
+      translatedText,
+      request.targetLanguage,
+    );
   });
 }
 

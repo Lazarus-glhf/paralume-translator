@@ -4,8 +4,10 @@ export const PROVIDER_SETTINGS_VERSION = 2 as const;
 
 export type ProviderId = "mock" | "openai" | "microsoft";
 export type OpenAiProtocol = "responses" | "chat-completions";
+// "omit" sends no reasoning parameter, for models and compatible endpoints
+// that reject it.
 export type OpenAiReasoningEffort =
-  "none" | "minimal" | "low" | "medium" | "high";
+  "omit" | "none" | "minimal" | "low" | "medium" | "high";
 export type TranslationFontFamily =
   "system" | "sans-serif" | "serif" | "monospace";
 

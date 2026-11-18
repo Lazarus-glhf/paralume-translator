@@ -1,3 +1,4 @@
+import { resolveUiLocale, type UiLocale } from "../localization";
 import {
   createBackgroundCancelTranslationMessage,
   createBackgroundTranslationMessage,
@@ -5,6 +6,7 @@ import {
 } from "../messaging/protocol";
 import {
   createGetContentSettingsMessage,
+  createOpenOptionsMessage,
   parseContentSettingsResponse,
 } from "../messaging/settings-protocol";
 import {
@@ -72,7 +74,9 @@ export function installContentRuntime(
   const state = createContentRuntimeState();
   let updateProgress: (progress: TranslationProgress) => void = () => undefined;
   let updateFailureCount: (count: number) => void = () => undefined;
-  let updateLocale: (locale: "en" | "zh-CN") => void = () => undefined;
+  let updateLocale: (locale: UiLocale) => void = () => undefined;
+  // Full page recount: re-extracts every candidate (computed styles, layout).
+  // Only run it at phase boundaries, never once per rendered segment.
   const getPageProgress = (
     phase: TranslationProgress["phase"],
   ): TranslationProgress => {
@@ -83,6 +87,10 @@ export function installContentRuntime(
       extractSegments(dependencies.document, state).length;
     return { phase, completed, total: completed + remaining };
   };
+  // Page total captured when a translating phase starts. Rendering moves
+  // segments from "remaining" to success/failure without changing the total,
+  // so per-segment updates only need the cheap rendered-translation counts.
+  let translatingPageTotal: number | undefined;
   const controller = createContentController({
     document: dependencies.document,
     state,
@@ -116,18 +124,38 @@ export function installContentRuntime(
       if (!parsed.value.ok) {
         throw new UserFacingError(parsed.value.error.code);
       }
-      const requested = parsed.value.contentSettings.uiLanguage;
-      const browserLanguage = dependencies.getBrowserUiLanguage?.();
+      // Same resolver as the controller, Popup, and Options so the menu never
+      // disagrees with page retry/failure text (e.g. zh-TW resolves to "en").
       updateLocale(
-        requested === "zh-CN" ||
-          (requested === "system" && browserLanguage?.startsWith("zh"))
-          ? "zh-CN"
-          : "en",
+        resolveUiLocale(
+          parsed.value.contentSettings.uiLanguage,
+          dependencies.getBrowserUiLanguage?.(),
+        ),
       );
       return parsed.value.contentSettings;
     },
     onProgress(progress) {
-      updateProgress(getPageProgress(progress.phase));
+      if (progress.phase !== "translating") {
+        translatingPageTotal = undefined;
+        updateProgress(getPageProgress(progress.phase));
+      } else if (
+        translatingPageTotal === undefined ||
+        progress.completed === 0
+      ) {
+        // Operation start (translate / retry-failed always report 0 first).
+        const pageProgress = getPageProgress("translating");
+        translatingPageTotal = pageProgress.total;
+        updateProgress(pageProgress);
+      } else {
+        const contentState = getContentState(dependencies.document, state);
+        const completed =
+          contentState.translationCount - contentState.failureCount;
+        updateProgress({
+          phase: "translating",
+          completed,
+          total: Math.max(translatingPageTotal, completed),
+        });
+      }
       updateFailureCount(
         getContentState(dependencies.document, state).failureCount,
       );
@@ -148,6 +176,9 @@ export function installContentRuntime(
       ...(dependencies.disableSite === undefined
         ? {}
         : { disableSite: dependencies.disableSite }),
+      async openSettings() {
+        await dependencies.runtime.sendMessage(createOpenOptionsMessage());
+      },
     },
   );
   state.ownedNodes.add(menu.host);
@@ -166,13 +197,13 @@ export function installContentRuntime(
     .then((rawSettings) => {
       const parsed = parseContentSettingsResponse(rawSettings);
       if (!parsed.ok || !parsed.value.ok) return;
-      const requested = parsed.value.contentSettings.uiLanguage;
-      const browserLanguage = dependencies.getBrowserUiLanguage?.();
+      // Same resolver as the controller, Popup, and Options so the menu never
+      // disagrees with page retry/failure text (e.g. zh-TW resolves to "en").
       updateLocale(
-        requested === "zh-CN" ||
-          (requested === "system" && browserLanguage?.startsWith("zh"))
-          ? "zh-CN"
-          : "en",
+        resolveUiLocale(
+          parsed.value.contentSettings.uiLanguage,
+          dependencies.getBrowserUiLanguage?.(),
+        ),
       );
     })
     .catch(() => undefined);

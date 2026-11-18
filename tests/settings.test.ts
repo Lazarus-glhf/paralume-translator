@@ -6,6 +6,7 @@ import {
   DEFAULT_RETRY_SETTINGS,
   SETTINGS_STORAGE_KEY,
   createSettingsRepository,
+  restrictStorageToTrustedContexts,
   type SettingsStorageArea,
 } from "../src/settings/repository";
 import {
@@ -226,21 +227,118 @@ describe("versioned settings repository", () => {
     expect(JSON.stringify(publicSettings)).not.toContain('"apiKey"');
   });
 
-  it("preserves existing keys unless a replacement is explicitly supplied", async () => {
+  it("preserves existing keys on the same origin unless a replacement is explicitly supplied", async () => {
     const storage = createStorage({
       ...DEFAULT_PROVIDER_SETTINGS,
       openai: {
         ...DEFAULT_PROVIDER_SETTINGS.openai,
+        // Same origin as validDraft; only the path differs.
+        baseUrl: "https://api.example.com/v0",
         apiKey: "existing-openai-key",
+      },
+      microsoft: {
+        ...DEFAULT_PROVIDER_SETTINGS.microsoft,
+        apiKey: "existing-microsoft-key",
       },
     });
     const repository = createSettingsRepository(storage);
 
-    await repository.save(validDraft, {});
+    await expect(repository.save(validDraft, {})).resolves.toMatchObject({
+      removedApiKeys: [],
+    });
 
     await expect(repository.load()).resolves.toMatchObject({
       openai: { apiKey: "existing-openai-key" },
+      microsoft: { apiKey: "existing-microsoft-key" },
     });
+  });
+
+  it("drops a stored key instead of sending it to a different endpoint origin", async () => {
+    const storage = createStorage({
+      ...DEFAULT_PROVIDER_SETTINGS,
+      openai: {
+        ...DEFAULT_PROVIDER_SETTINGS.openai,
+        apiKey: "official-openai-key",
+      },
+      microsoft: {
+        ...DEFAULT_PROVIDER_SETTINGS.microsoft,
+        apiKey: "official-microsoft-key",
+      },
+    });
+    const repository = createSettingsRepository(storage);
+
+    // api.openai.com -> api.example.com; Microsoft endpoint unchanged.
+    await expect(repository.save(validDraft, {})).resolves.toMatchObject({
+      removedApiKeys: ["openai"],
+    });
+    const stored = await repository.load();
+    expect(stored.openai.baseUrl).toBe("https://api.example.com/v1");
+    expect(stored.openai.apiKey).toBeUndefined();
+    expect(stored.microsoft.apiKey).toBe("official-microsoft-key");
+    await expect(repository.loadPublic()).resolves.toMatchObject({
+      openai: { apiKeyConfigured: false },
+      microsoft: { apiKeyConfigured: true },
+    });
+
+    await repository.save(
+      {
+        ...validDraft,
+        microsoft: {
+          ...validDraft.microsoft,
+          endpoint: "https://translator.example.net",
+        },
+      },
+      { microsoftApiKey: "new-endpoint-microsoft-key" },
+    );
+    await expect(repository.load()).resolves.toMatchObject({
+      microsoft: {
+        endpoint: "https://translator.example.net",
+        apiKey: "new-endpoint-microsoft-key",
+      },
+    });
+  });
+
+  it("treats a port change as a different origin", async () => {
+    const repository = createSettingsRepository(
+      createStorage({
+        ...DEFAULT_PROVIDER_SETTINGS,
+        openai: {
+          ...DEFAULT_PROVIDER_SETTINGS.openai,
+          baseUrl: "https://api.example.com/v1",
+          apiKey: "port-bound-key",
+        },
+      }),
+    );
+
+    await repository.save(
+      {
+        ...validDraft,
+        openai: {
+          ...validDraft.openai,
+          baseUrl: "https://api.example.com:8443/v1",
+        },
+      },
+      {},
+    );
+
+    expect((await repository.load()).openai.apiKey).toBeUndefined();
+  });
+
+  it("restricts storage to trusted contexts when the browser supports it", async () => {
+    const setAccessLevel = vi.fn(() => Promise.resolve());
+    await expect(
+      restrictStorageToTrustedContexts({ setAccessLevel }),
+    ).resolves.toBe(true);
+    expect(setAccessLevel).toHaveBeenCalledWith({
+      accessLevel: "TRUSTED_CONTEXTS",
+    });
+
+    await expect(restrictStorageToTrustedContexts({})).resolves.toBe(false);
+    await expect(
+      restrictStorageToTrustedContexts({
+        setAccessLevel: () => Promise.reject(new Error("unsupported")),
+      }),
+    ).resolves.toBe(false);
   });
 
   it("clears only the selected provider key idempotently", async () => {

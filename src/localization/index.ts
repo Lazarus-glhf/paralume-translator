@@ -32,7 +32,21 @@ const EN_MESSAGES = {
   "content.translationSummaryOmitted":
     "Translated {succeeded} readable blocks; {failed} unavailable; {omitted} additional blocks were skipped.",
   "content.translationUnavailable": "Translation unavailable. {error}",
-  "options.apiKeyConfigured": "API key configured; leave blank to keep it",
+  "menu.clear": "Clear translations",
+  "menu.complete": "Translation complete",
+  "menu.disableSite": "Disable on this site",
+  "menu.error": "Translation needs attention",
+  "menu.expand": "More translation controls",
+  "menu.hidePage": "Hide on this page",
+  "menu.openSettings": "Open settings",
+  "menu.ready": "Ready",
+  "menu.retryFailed": "Retry all failed",
+  "menu.siteControls": "Site controls",
+  "menu.toggle": "Show or hide translations",
+  "menu.translate": "Translate page",
+  "menu.translating": "Translating",
+  "options.apiKeyConfigured":
+    "API key configured; leave blank to keep it for the same server",
   "options.apiKeyEmpty": "Enter API key",
   "options.apiKey": "API key",
   "options.appearance": "Appearance",
@@ -75,6 +89,7 @@ const EN_MESSAGES = {
   "options.reasoningMedium": "Medium",
   "options.reasoningMinimal": "Minimal",
   "options.reasoningNone": "None",
+  "options.reasoningOmit": "Don't send (provider default)",
   "options.region": "Region",
   "options.resetAppearance": "Reset appearance",
   "options.retry": "Automatic retry",
@@ -106,9 +121,9 @@ const EN_MESSAGES = {
   "settings.loaded": "Settings loaded.",
   "settings.microsoftKeyCleared": "Microsoft Translator API key cleared.",
   "settings.openAiKeyCleared": "OpenAI-compatible API key cleared.",
-  "settings.permissionRemovalFailed":
-    "Settings were saved, but the previous provider permission could not be removed. Remove it from the browser extension settings.",
   "settings.saved": "Settings saved.",
+  "settings.savedApiKeyRemoved":
+    "Settings saved. The provider server changed, so its saved API key was removed. Enter the API key for the new server.",
   "settings.testSucceeded": "Provider connection test succeeded.",
 } as const;
 
@@ -148,7 +163,20 @@ const ZH_CN_MESSAGES: Record<MessageId, string> = {
   "content.translationSummaryOmitted":
     "已翻译 {succeeded} 个可读文本块；{failed} 个不可用；另有 {omitted} 个已跳过。",
   "content.translationUnavailable": "译文不可用。{error}",
-  "options.apiKeyConfigured": "已配置 API 密钥；留空可保留现有密钥",
+  "menu.clear": "清除译文",
+  "menu.complete": "翻译完成",
+  "menu.disableSite": "在此网站停用",
+  "menu.error": "翻译需要处理",
+  "menu.expand": "更多翻译控制",
+  "menu.hidePage": "在此页面隐藏",
+  "menu.openSettings": "打开设置",
+  "menu.ready": "准备就绪",
+  "menu.retryFailed": "批量重试失败项",
+  "menu.siteControls": "网站控制",
+  "menu.toggle": "显示或隐藏译文",
+  "menu.translate": "翻译页面",
+  "menu.translating": "正在翻译",
+  "options.apiKeyConfigured": "已配置 API 密钥；服务器地址不变时留空可保留",
   "options.apiKeyEmpty": "输入 API 密钥",
   "options.apiKey": "API 密钥",
   "options.appearance": "外观",
@@ -190,6 +218,7 @@ const ZH_CN_MESSAGES: Record<MessageId, string> = {
   "options.reasoningMedium": "中",
   "options.reasoningMinimal": "最小",
   "options.reasoningNone": "无",
+  "options.reasoningOmit": "不发送（使用服务默认值）",
   "options.region": "区域",
   "options.resetAppearance": "重置外观",
   "options.retry": "自动重试",
@@ -220,9 +249,9 @@ const ZH_CN_MESSAGES: Record<MessageId, string> = {
   "settings.loaded": "设置已加载。",
   "settings.microsoftKeyCleared": "已清除 Microsoft Translator API 密钥。",
   "settings.openAiKeyCleared": "已清除 OpenAI 兼容 API 密钥。",
-  "settings.permissionRemovalFailed":
-    "设置已保存，但无法移除之前的服务权限。请在浏览器扩展程序设置中将其移除。",
   "settings.saved": "设置已保存。",
+  "settings.savedApiKeyRemoved":
+    "设置已保存。服务器地址已更改，原有 API 密钥已移除。请为新服务器输入 API 密钥。",
   "settings.testSucceeded": "翻译服务连接测试成功。",
 };
 
@@ -246,6 +275,9 @@ const ZH_CN_ERRORS: Record<ErrorCode, string> = {
   SERVER_UNAVAILABLE: "翻译服务暂时不可用，请稍后重试。",
   MALFORMED_JSON: "翻译服务返回了格式错误的 JSON。",
   MALFORMED_PROVIDER_OUTPUT: "翻译服务返回的内容不符合所需格式。",
+  UNTRANSLATED_OUTPUT: "翻译服务返回了原文，而不是译文。",
+  INCOMPLETE_PROVIDER_OUTPUT:
+    "翻译服务在完成翻译前停止了输出，可能达到了输出长度上限或触发了内容过滤。",
   API_KEY_UNCONFIGURED: "尚未配置所选翻译服务的 API 密钥。",
   PERMISSION_MISSING:
     "尚未授予已配置翻译服务来源的访问权限，请重新保存服务设置。",

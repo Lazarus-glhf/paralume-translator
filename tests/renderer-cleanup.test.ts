@@ -19,6 +19,7 @@ import {
 import { createContentRuntimeState } from "../src/content/state";
 import { DEFAULT_APPEARANCE_SETTINGS } from "../src/settings/repository";
 import { createError } from "../src/shared/errors";
+import { trustedClick } from "./helpers/dom";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -251,17 +252,101 @@ describe("safe translation rendering", () => {
     expect(button?.getAttribute("aria-label")).toBe("重试此可读文本块的翻译");
     expect(button?.getAttribute(PARALUME_OWNED_ATTRIBUTE)).toBe("true");
     expect(button?.style.justifySelf).toBe("end");
+    if (button === null) {
+      throw new Error("Retry button was not rendered.");
+    }
 
-    button?.click();
+    // Synthetic page clicks on the page-DOM Retry button are ignored.
+    button.click();
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onRetry).not.toHaveBeenCalled();
+
+    trustedClick(button);
     expect(onRetry).toHaveBeenCalledOnce();
     setTranslationPending(translation, state, true, "zh-CN");
-    expect(button?.disabled).toBe(true);
-    expect(button?.textContent).toBe("正在重试…");
-    button?.click();
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toBe("正在重试…");
+    trustedClick(button);
     expect(onRetry).toHaveBeenCalledOnce();
     setTranslationPending(translation, state, false, "zh-CN");
-    expect(button?.disabled).toBe(false);
-    expect(button?.textContent).toBe("重试");
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toBe("重试");
+  });
+
+  it("keeps Retry clicks inside linked cards from navigating or reaching page handlers", () => {
+    document.body.innerHTML = `
+      <div id="card"><a id="card-link" href="#navigated"><h3 id="source">Readable linked card heading</h3></a></div>
+    `;
+    const card = document.querySelector<HTMLElement>("#card");
+    const link = document.querySelector<HTMLAnchorElement>("#card-link");
+    const cardClick = vi.fn();
+    // Cancels so the control click below does not navigate the test window.
+    const linkClick = vi.fn((event: Event) => {
+      event.preventDefault();
+    });
+    card?.addEventListener("click", cardClick);
+    link?.addEventListener("click", linkClick);
+    const state = createContentRuntimeState({ runtimeId: "linked-retry" });
+    const extracted = extractSegments(document, state)[0];
+    const onRetry = vi.fn();
+    if (card === null || link === null || extracted === undefined) {
+      throw new Error("Linked card fixture was not created.");
+    }
+
+    const translation = renderTranslation(
+      extracted,
+      {
+        id: extracted.segment.id,
+        status: "failure",
+        error: createError("SERVER_UNAVAILABLE"),
+      },
+      state,
+      true,
+      { locale: "en", onRetry },
+    );
+    const button = translation.querySelector<HTMLButtonElement>(
+      `[${PARALUME_RETRY_ATTRIBUTE}]`,
+    );
+    if (button === null) {
+      throw new Error("Retry button was not rendered.");
+    }
+    // The fixture really places Retry inside the link, as on real cards.
+    expect(link.contains(button)).toBe(true);
+
+    const trusted = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    Object.defineProperty(trusted, "isTrusted", { value: true });
+    button.dispatchEvent(trusted);
+
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(trusted.defaultPrevented).toBe(true);
+    expect(linkClick).not.toHaveBeenCalled();
+    expect(cardClick).not.toHaveBeenCalled();
+
+    // Pending and synthetic clicks are also contained, without retrying.
+    setTranslationPending(translation, state, true, "en");
+    trustedClick(button);
+    setTranslationPending(translation, state, false, "en");
+    const synthetic = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    button.dispatchEvent(synthetic);
+
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(synthetic.defaultPrevented).toBe(true);
+    expect(linkClick).not.toHaveBeenCalled();
+    expect(cardClick).not.toHaveBeenCalled();
+
+    // Clicking the original linked text keeps the page's own behavior.
+    extracted.element.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    expect(linkClick).toHaveBeenCalledOnce();
+    expect(cardClick).toHaveBeenCalledOnce();
   });
 
   it("renders a localized failure without Retry when no segment retry action is provided", () => {
@@ -507,7 +592,7 @@ describe("translation visibility and cleanup", () => {
 
     expect(extractSegments(document, state)).toHaveLength(0);
     expect(clearTranslations(document, state)).toBe(1);
-    button.click();
+    trustedClick(button);
     expect(onRetry).not.toHaveBeenCalled();
   });
 
@@ -543,7 +628,7 @@ describe("translation visibility and cleanup", () => {
     expect(extracted.element.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(
       false,
     );
-    button.click();
+    trustedClick(button);
     expect(onRetry).not.toHaveBeenCalled();
   });
 

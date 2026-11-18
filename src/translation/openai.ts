@@ -6,10 +6,11 @@ import type {
   TranslationStreamProvider,
 } from "./provider";
 import { fetchProviderJson, type HttpProviderDependencies } from "./http";
-import { readServerSentEvents } from "./sse";
+import { readServerSentEvents, SSE_STREAM_END } from "./sse";
 import {
   createCompactTranslationIds,
   createCompactTranslationJsonSchema,
+  createValidatedTranslationResult,
   parseCompactStructuredTranslations,
   type CompactTranslationIds,
 } from "./structured-output";
@@ -58,6 +59,20 @@ function systemPrompt(): string {
     "Return every i exactly once with its translation in v.",
     "Preserve line breaks, blank lines, and list markers.",
   ].join(" ");
+}
+
+type ReasoningEffort = ConfiguredOpenAiSettings["reasoningEffort"];
+
+// Responses stores responses by default; Paralume is local-first, so it opts
+// out. Chat Completions does not store by default, so nothing is sent there.
+function responsesOptions(effort: ReasoningEffort): Record<string, unknown> {
+  return effort === "omit"
+    ? { store: false }
+    : { store: false, reasoning: { effort } };
+}
+
+function chatOptions(effort: ReasoningEffort): Record<string, unknown> {
+  return effort === "omit" ? {} : { reasoning_effort: effort };
 }
 
 function extractResponsesText(payload: unknown): string {
@@ -119,6 +134,79 @@ function streamedDelta(event: unknown): string | undefined {
   return undefined;
 }
 
+const RATE_LIMIT_ERROR_CODES = new Set([
+  "rate_limit_exceeded",
+  "rate_limit_error",
+  "too_many_requests",
+]);
+const SERVER_ERROR_CODES = new Set([
+  "server_error",
+  "internal_error",
+  "internal_server_error",
+  "server_overloaded",
+  "overloaded_error",
+  "service_unavailable",
+]);
+
+// Maps a provider-reported failure to a safe code. Only the machine-readable
+// code/type fields are inspected; provider messages are never surfaced.
+function providerFailure(error: unknown): UserFacingError {
+  const candidates = isRecord(error)
+    ? [error["code"], error["type"]].filter(
+        (value): value is string => typeof value === "string",
+      )
+    : [];
+  const codes = candidates.map((value) => value.toLowerCase());
+  if (codes.some((code) => RATE_LIMIT_ERROR_CODES.has(code))) {
+    return new UserFacingError("RATE_LIMITED");
+  }
+  if (codes.some((code) => SERVER_ERROR_CODES.has(code))) {
+    return new UserFacingError("SERVER_UNAVAILABLE");
+  }
+  return new UserFacingError("TRANSLATION_FAILED");
+}
+
+/**
+ * Throws for Responses stream events that end the response without a usable
+ * translation: `error`, `response.failed`, and a bare `{ error }` object sent
+ * by some compatible endpoints. Returns true for `response.incomplete`, a
+ * terminal event that is only reported when the streamed output cannot be
+ * parsed.
+ */
+function checkStreamFailure(event: unknown): boolean {
+  if (!isRecord(event)) return false;
+  const type = event["type"];
+  if (type === "error") {
+    throw providerFailure(isRecord(event["error"]) ? event["error"] : event);
+  }
+  if (type === "response.failed") {
+    const response = event["response"];
+    throw providerFailure(isRecord(response) ? response["error"] : undefined);
+  }
+  if (type === undefined && isRecord(event["error"])) {
+    throw providerFailure(event["error"]);
+  }
+  return type === "response.incomplete";
+}
+
+function parseOrReportIncomplete(
+  incomplete: boolean,
+  parse: () => readonly TranslationResult[],
+): readonly TranslationResult[] {
+  try {
+    return parse();
+  } catch (error) {
+    if (
+      incomplete &&
+      error instanceof UserFacingError &&
+      error.code === "MALFORMED_PROVIDER_OUTPUT"
+    ) {
+      throw new UserFacingError("INCOMPLETE_PROVIDER_OUTPUT");
+    }
+    throw error;
+  }
+}
+
 export class OpenAiTranslationProvider implements TranslationStreamProvider {
   readonly name = "OpenAI-compatible";
 
@@ -144,7 +232,7 @@ export class OpenAiTranslationProvider implements TranslationStreamProvider {
     const schema = createCompactTranslationJsonSchema(request.segments.length);
     const body = JSON.stringify({
       model: this.#settings.model,
-      reasoning: { effort: this.#settings.reasoningEffort },
+      ...responsesOptions(this.#settings.reasoningEffort),
       stream: true,
       input: [
         { role: "system", content: systemPrompt() },
@@ -164,6 +252,7 @@ export class OpenAiTranslationProvider implements TranslationStreamProvider {
     const itemPattern =
       /\{\s*"i"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"v"\s*:\s*"((?:\\.|[^"\\])*)"\s*\}/gu;
     const emitted = new Set<string>();
+    let incomplete = false;
     await readServerSentEvents(
       endpoint(this.#settings.baseUrl, "responses"),
       {
@@ -176,8 +265,19 @@ export class OpenAiTranslationProvider implements TranslationStreamProvider {
       },
       this.#dependencies,
       (event) => {
+        if (checkStreamFailure(event)) {
+          incomplete = true;
+          return SSE_STREAM_END;
+        }
+        // `response.completed` is the final Responses event. Stop here so an
+        // endpoint that keeps the connection open cannot turn a finished
+        // response into an idle timeout (and a paid automatic retry). The
+        // accumulated output is still fully validated below.
+        if (isRecord(event) && event["type"] === "response.completed") {
+          return SSE_STREAM_END;
+        }
         const delta = streamedDelta(event);
-        if (delta === undefined) return;
+        if (delta === undefined) return undefined;
         serialized += delta;
         itemPattern.lastIndex = cursor;
         let match: RegExpExecArray | null;
@@ -189,15 +289,27 @@ export class OpenAiTranslationProvider implements TranslationStreamProvider {
           if (!id || emitted.has(id) || !translatedText.trim()) {
             throw new UserFacingError("MALFORMED_PROVIDER_OUTPUT");
           }
+          const source = request.segments.find((segment) => segment.id === id);
+          if (source === undefined) {
+            throw new UserFacingError("MALFORMED_PROVIDER_OUTPUT");
+          }
+          const result = createValidatedTranslationResult(
+            id,
+            source.text,
+            translatedText,
+            request.targetLanguage,
+          );
           emitted.add(id);
-          const result = { id, status: "success" as const, translatedText };
           context?.onResult?.(result);
           context?.sendResult?.(result);
         }
+        return undefined;
       },
       context?.signal,
     );
-    return parseCompactStructuredTranslations(serialized, request, ids);
+    return parseOrReportIncomplete(incomplete, () =>
+      parseCompactStructuredTranslations(serialized, request, ids),
+    );
   }
 
   async translate(
@@ -222,7 +334,7 @@ export class OpenAiTranslationProvider implements TranslationStreamProvider {
           ...shared,
           body: JSON.stringify({
             model: this.#settings.model,
-            reasoning: { effort: this.#settings.reasoningEffort },
+            ...responsesOptions(this.#settings.reasoningEffort),
             input: [
               { role: "system", content: systemPrompt() },
               { role: "user", content: translationPrompt(request, ids) },
@@ -240,10 +352,14 @@ export class OpenAiTranslationProvider implements TranslationStreamProvider {
         this.#dependencies,
         context?.signal,
       );
-      return parseCompactStructuredTranslations(
-        extractResponsesText(payload),
-        request,
-        ids,
+      const incomplete =
+        isRecord(payload) && payload["status"] === "incomplete";
+      return parseOrReportIncomplete(incomplete, () =>
+        parseCompactStructuredTranslations(
+          extractResponsesText(payload),
+          request,
+          ids,
+        ),
       );
     }
 
@@ -254,7 +370,7 @@ export class OpenAiTranslationProvider implements TranslationStreamProvider {
         ...shared,
         body: JSON.stringify({
           model: this.#settings.model,
-          reasoning_effort: this.#settings.reasoningEffort,
+          ...chatOptions(this.#settings.reasoningEffort),
           messages: [
             { role: "system", content: systemPrompt() },
             { role: "user", content: translationPrompt(request, ids) },

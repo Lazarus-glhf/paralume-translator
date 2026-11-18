@@ -48,12 +48,35 @@ export interface TestConnectionMessage {
   command: "test-connection";
 }
 
+export interface OpenOptionsMessage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  target: "settings";
+  command: "open-options";
+}
+
+// Floating-menu site preference for the sender's own site. The site is
+// derived from the sender URL in the background, never from the message.
+export interface GetSiteStateMessage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  target: "settings";
+  command: "get-site-state";
+}
+
+export interface DisableSiteMessage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  target: "settings";
+  command: "disable-site";
+}
+
 export type SettingsRequest =
   | GetSettingsMessage
   | GetContentSettingsMessage
   | SaveSettingsMessage
   | ClearApiKeyMessage
-  | TestConnectionMessage;
+  | TestConnectionMessage
+  | OpenOptionsMessage
+  | GetSiteStateMessage
+  | DisableSiteMessage;
 
 export interface SettingsSuccessResponse {
   protocolVersion: typeof PROTOCOL_VERSION;
@@ -71,7 +94,25 @@ export interface ContentSettingsSuccessResponse {
 export type SettingsResponse = SettingsSuccessResponse | ErrorResponse;
 export type ContentSettingsResponse =
   ContentSettingsSuccessResponse | ErrorResponse;
-export type AnySettingsResponse = SettingsResponse | ContentSettingsResponse;
+export interface OpenOptionsSuccessResponse {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  ok: true;
+}
+
+export interface SiteStateSuccessResponse {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  ok: true;
+  siteDisabled: boolean;
+}
+
+export type SiteStateResponse = SiteStateSuccessResponse | ErrorResponse;
+export type DisableSiteResponse = OpenOptionsSuccessResponse | ErrorResponse;
+
+export type AnySettingsResponse =
+  | SettingsResponse
+  | ContentSettingsResponse
+  | OpenOptionsSuccessResponse
+  | SiteStateSuccessResponse;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -320,6 +361,9 @@ export function parseSettingsRequest(
     case "get":
     case "get-content":
     case "test-connection":
+    case "open-options":
+    case "get-site-state":
+    case "disable-site":
       return hasOnlyKeys(value, ["protocolVersion", "target", "command"])
         ? { ok: true, value: value as unknown as SettingsRequest }
         : invalid();
@@ -427,6 +471,66 @@ export function parseContentSettingsResponse(
       };
 }
 
+export function parseSiteStateResponse(
+  value: unknown,
+): ValidationResult<SiteStateResponse> {
+  const error = parseErrorResponse(value);
+  if (error !== undefined) {
+    return { ok: true, value: error };
+  }
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["protocolVersion", "ok", "siteDisabled"]) ||
+    value["protocolVersion"] !== PROTOCOL_VERSION ||
+    value["ok"] !== true ||
+    typeof value["siteDisabled"] !== "boolean"
+  ) {
+    return invalid();
+  }
+  return {
+    ok: true,
+    value: {
+      protocolVersion: PROTOCOL_VERSION,
+      ok: true,
+      siteDisabled: value["siteDisabled"],
+    },
+  };
+}
+
+export function parseDisableSiteResponse(
+  value: unknown,
+): ValidationResult<DisableSiteResponse> {
+  const error = parseErrorResponse(value);
+  if (error !== undefined) {
+    return { ok: true, value: error };
+  }
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["protocolVersion", "ok"]) ||
+    value["protocolVersion"] !== PROTOCOL_VERSION ||
+    value["ok"] !== true
+  ) {
+    return invalid();
+  }
+  return { ok: true, value: { protocolVersion: PROTOCOL_VERSION, ok: true } };
+}
+
+export function createGetSiteStateMessage(): GetSiteStateMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    target: "settings",
+    command: "get-site-state",
+  };
+}
+
+export function createDisableSiteMessage(): DisableSiteMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    target: "settings",
+    command: "disable-site",
+  };
+}
+
 export function createGetSettingsMessage(): GetSettingsMessage {
   return {
     protocolVersion: PROTOCOL_VERSION,
@@ -440,6 +544,14 @@ export function createGetContentSettingsMessage(): GetContentSettingsMessage {
     protocolVersion: PROTOCOL_VERSION,
     target: "settings",
     command: "get-content",
+  };
+}
+
+export function createOpenOptionsMessage(): OpenOptionsMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    target: "settings",
+    command: "open-options",
   };
 }
 

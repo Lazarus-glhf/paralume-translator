@@ -6,7 +6,6 @@ export default defineContentScript({
   async main() {
     await bootstrapContentRuntime(document, location, globalThis, {
       runtime: browser.runtime,
-      storage: browser.storage,
       getUiLanguage: () => browser.i18n.getUILanguage(),
     });
   },

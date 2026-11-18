@@ -1,6 +1,11 @@
 import { CANDIDATE_BLOCK_SELECTOR } from "./constants";
 import type { ContentRuntimeState } from "./state";
-import { getReadableText, hasMeaningfulText } from "./text";
+import {
+  getReadableText,
+  hasMeaningfulText,
+  isCompoundStructuralContainer,
+  isContentVisibilityHidden,
+} from "./text";
 
 const EXCLUDED_ANCESTOR_SELECTOR = [
   "script",
@@ -48,7 +53,9 @@ function isHidden(element: HTMLElement): boolean {
     if (
       style?.display === "none" ||
       style?.visibility === "hidden" ||
-      style?.visibility === "collapse"
+      style?.visibility === "collapse" ||
+      // Hides the contents of the element itself and of every ancestor.
+      isContentVisibilityHidden(style)
     ) {
       return true;
     }
@@ -83,9 +90,11 @@ function hasProcessedStructuralAncestor(
     current !== null;
     current = current.parentElement
   ) {
+    // Only a merged (non-compound) list item/cell owns its nested blocks.
     if (
       ["LI", "TD", "TH"].includes(current.tagName) &&
-      state.sourceMarkers.has(current)
+      state.sourceMarkers.has(current) &&
+      !isCompoundStructuralContainer(current, state)
     ) {
       return true;
     }
@@ -112,5 +121,5 @@ export function isEligibleCandidate(
     return false;
   }
 
-  return hasMeaningfulText(getReadableText(element));
+  return hasMeaningfulText(getReadableText(element, state));
 }

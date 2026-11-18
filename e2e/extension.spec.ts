@@ -15,6 +15,7 @@ import { triggerActionPopup, waitForDevToolsEndpoint } from "./action-popup";
 
 const extensionPath = resolve(".output/chrome-mv3");
 const fixturePath = resolve("e2e/fixtures/static-article.html");
+const extractionFixturePath = resolve("e2e/fixtures/extraction-article.html");
 const fixtureUrl = "http://127.0.0.1:4173/static-article.html";
 const retryFixtureUrl = "http://127.0.0.1:4173/retry-article.html";
 const translationSelector =
@@ -27,6 +28,143 @@ const paralumeMarkerSelector = [
 ].join(", ");
 const floatingMenuSelector =
   '[data-paralume-owned="true"]:not([data-paralume-translation-for])';
+
+interface CdpDomNode {
+  readonly nodeId: number;
+  readonly attributes?: readonly string[];
+  readonly children?: readonly CdpDomNode[];
+  readonly shadowRoots?: readonly CdpDomNode[];
+  readonly shadowRootType?: string;
+}
+
+interface ResolvedMenuNode {
+  readonly objectId: string;
+  readonly shadowRootType: string | undefined;
+}
+
+interface FloatingMenuControl {
+  readonly text: string;
+  readonly visible: boolean;
+  readonly x: number;
+  readonly y: number;
+}
+
+function findFloatingMenuHost(node: CdpDomNode): CdpDomNode | undefined {
+  const attributes = node.attributes ?? [];
+  const named = (name: string) => attributes.indexOf(name) % 2 === 0;
+  if (
+    named("data-paralume-owned") &&
+    !named("data-paralume-translation-for") &&
+    (node.shadowRoots?.length ?? 0) > 0
+  ) {
+    return node;
+  }
+  for (const child of node.children ?? []) {
+    const host = findFloatingMenuHost(child);
+    if (host !== undefined) {
+      return host;
+    }
+  }
+  return undefined;
+}
+
+// The floating menu uses a closed shadow root that Playwright locators and
+// page scripts cannot pierce, so tests reach it through CDP with pierce:true.
+async function resolveFloatingMenuNode(
+  cdp: CDPSession,
+  selector: string,
+): Promise<ResolvedMenuNode | undefined> {
+  const { root } = await cdp.send("DOM.getDocument", {
+    depth: -1,
+    pierce: true,
+  });
+  const shadowRoot = findFloatingMenuHost(root)?.shadowRoots?.[0];
+  if (shadowRoot === undefined) {
+    return undefined;
+  }
+  const { nodeId } = await cdp.send("DOM.querySelector", {
+    nodeId: shadowRoot.nodeId,
+    selector,
+  });
+  if (nodeId === 0) {
+    return undefined;
+  }
+  const { object } = await cdp.send("DOM.resolveNode", { nodeId });
+  if (object.objectId === undefined) {
+    return undefined;
+  }
+  return {
+    objectId: object.objectId,
+    shadowRootType: shadowRoot.shadowRootType,
+  };
+}
+
+async function readFloatingMenuControl(
+  cdp: CDPSession,
+  selector: string,
+): Promise<FloatingMenuControl | undefined> {
+  const node = await resolveFloatingMenuNode(cdp, selector);
+  if (node === undefined) {
+    return undefined;
+  }
+  const { result } = await cdp.send("Runtime.callFunctionOn", {
+    objectId: node.objectId,
+    functionDeclaration: `function () {
+      const rect = this.getBoundingClientRect();
+      return {
+        text: (this.textContent || "").trim(),
+        visible: this.getClientRects().length > 0 && rect.width > 0,
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+    }`,
+    returnByValue: true,
+  });
+  return result.value as FloatingMenuControl;
+}
+
+async function readFloatingMenuText(
+  cdp: CDPSession,
+  selector: string,
+): Promise<string | undefined> {
+  return (await readFloatingMenuControl(cdp, selector))?.text;
+}
+
+// Trusted input: CDP Input events are browser-generated, like a real user.
+async function clickFloatingMenuControl(
+  page: Page,
+  cdp: CDPSession,
+  selector: string,
+): Promise<void> {
+  await expect
+    .poll(async () => (await readFloatingMenuControl(cdp, selector))?.visible)
+    .toBe(true);
+  const control = await readFloatingMenuControl(cdp, selector);
+  if (control === undefined) {
+    throw new Error(`Floating menu control ${selector} was not found.`);
+  }
+  await page.mouse.click(control.x, control.y);
+}
+
+// Untrusted input: what a page script could do with a reference to a control.
+async function syntheticClickFloatingMenuControl(
+  cdp: CDPSession,
+  selector: string,
+): Promise<void> {
+  const node = await resolveFloatingMenuNode(cdp, selector);
+  if (node === undefined) {
+    throw new Error(`Floating menu control ${selector} was not found.`);
+  }
+  await cdp.send("Runtime.callFunctionOn", {
+    objectId: node.objectId,
+    functionDeclaration: `function () {
+      this.click();
+      this.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, composed: true }),
+      );
+    }`,
+  });
+}
 
 interface ChromiumExtensionApi {
   tabs: {
@@ -762,6 +900,169 @@ test.describe("unpacked Chromium extension", () => {
     await articlePage.close();
   });
 
+  test("Chromium extraction skips hidden/excluded descendants and splits nested lists and layout tables", async () => {
+    if (context === undefined) {
+      throw new Error("The extension browser context was not initialized.");
+    }
+
+    const extractionPage = await context.newPage();
+    await extractionPage.goto(`chrome-extension://${extensionId}/options.html`);
+    // The inline <script> inside the paragraph is intentionally kept: the
+    // extension page CSP blocks it, but its text must still never be sent.
+    await extractionPage.setContent(
+      await readFile(extractionFixturePath, "utf8"),
+    );
+    await extractionPage.addScriptTag({
+      url: `chrome-extension://${extensionId}/paralume.js`,
+    });
+    const extractionTabId = await extractionPage.evaluate(async () => {
+      const extensionApi = (
+        globalThis as unknown as { chrome: ChromiumExtensionApi }
+      ).chrome;
+      return (await extensionApi.tabs.getCurrent()).id;
+    });
+    if (extractionTabId === undefined) {
+      throw new Error("The extraction fixture tab ID was not available.");
+    }
+    const initialBody = await extractionPage
+      .locator("body")
+      .evaluate((body) => body.innerHTML);
+
+    const expectedTexts: Record<string, string> = {
+      "mixed-paragraph":
+        "Visible paragraph keeps its readable words plus visible emphasis and a normal ending.",
+      "glued-item": "First glued sentence. Second glued sentence.",
+      "simple-item": "Simple item with one nested paragraph",
+      "outer-item": "Outer list item introduction text",
+      "inner-item-one": "Inner list item number one",
+      "inner-item-two": "Inner list item number two",
+      "code-item": "List item explaining the snippet below",
+      "code-item-pre": 'const snippet = "kept apart";',
+      "story-title": "Layout table story title text",
+      "story-meta": "Layout table story metadata line",
+      "layout-paragraph-one": "Layout cell paragraph number one.",
+      "layout-paragraph-two": "Layout cell paragraph number two.",
+      "cv-mixed":
+        "Visible content-visibility sentence still rendered inline ends here.",
+      "cv-auto": "Deferred but readable paragraph",
+      "short-nested-item": "Step one opens the settings page Done.",
+      "loose-quote": "Quote introduction loose text",
+      "loose-quoted": "Quoted paragraph text here",
+    };
+    const expectedCount = Object.keys(expectedTexts).length;
+
+    // Ground truth from Chromium: checkVisibility() reports content skipped
+    // by content-visibility: hidden as not visible.
+    await expect(
+      extractionPage.evaluate(() =>
+        Object.fromEntries(
+          [
+            "cv-ancestor-hidden",
+            "cv-self-probe",
+            "cv-skipped-probe",
+            "cv-inline-probe",
+            "cv-auto",
+          ].map((id) => [
+            id,
+            document.getElementById(id)?.checkVisibility() ?? null,
+          ]),
+        ),
+      ),
+    ).resolves.toEqual({
+      "cv-ancestor-hidden": false,
+      "cv-self-probe": false,
+      "cv-skipped-probe": false,
+      "cv-inline-probe": true,
+      "cv-auto": true,
+    });
+
+    await expect(
+      runRuntimeCommand(popupPage, extractionTabId, "translate"),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: "content.translationSummary",
+        values: { succeeded: expectedCount, failed: 0 },
+      },
+    });
+    await expect(extractionPage.locator(translationSelector)).toHaveCount(
+      expectedCount,
+    );
+
+    const translatedBySource = await extractionPage.evaluate(() => {
+      const outputs: Record<string, string | null> = {};
+      const sources = document.querySelectorAll("[data-paralume-source-id]");
+      const translations = Array.from(
+        document.querySelectorAll(
+          '[data-paralume-owned="true"][data-paralume-translation-for]',
+        ),
+      );
+      for (const source of sources) {
+        const sourceId = source.getAttribute("data-paralume-source-id");
+        const translation = translations.find(
+          (candidate) =>
+            candidate.getAttribute("data-paralume-translation-for") ===
+            sourceId,
+        );
+        outputs[source.id] = translation?.textContent ?? null;
+      }
+      return outputs;
+    });
+    expect(translatedBySource).toEqual(
+      Object.fromEntries(
+        Object.entries(expectedTexts).map(([id, text]) => [
+          id,
+          `【Mock zh-CN】${text}`,
+        ]),
+      ),
+    );
+    await expect(
+      extractionPage.locator("#layout-cell[data-paralume-source-id]"),
+    ).toHaveCount(0);
+    const allTranslationText = (
+      await extractionPage.locator(translationSelector).allTextContents()
+    ).join("\n");
+    for (const secret of [
+      "SCRIPT_SECRET_TEXT",
+      "STYLE_SECRET_TEXT",
+      "HIDDEN_ATTRIBUTE_SECRET",
+      "DISPLAY_NONE_SECRET",
+      "VISIBILITY_SECRET",
+      "ARIA_HIDDEN_SECRET",
+      "BUTTON_SECRET",
+      "CV_ANCESTOR_SECRET",
+      "CV_SELF_SECRET",
+      "CV_DESCENDANT_SECRET",
+    ]) {
+      expect(allTranslationText).not.toContain(secret);
+    }
+
+    // Translations rendered inside compound list items/cells must not make
+    // their source look changed, so a repeat request stays idempotent.
+    await expect(
+      runRuntimeCommand(popupPage, extractionTabId, "translate"),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: { id: "content.alreadyUpToDate" },
+    });
+    await expect(extractionPage.locator(translationSelector)).toHaveCount(
+      expectedCount,
+    );
+
+    await expect(
+      runRuntimeCommand(popupPage, extractionTabId, "clear"),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: { id: "content.cleared", values: { count: expectedCount } },
+    });
+    await expect(extractionPage.locator(paralumeMarkerSelector)).toHaveCount(0);
+    expect(
+      await extractionPage.locator("body").evaluate((body) => body.innerHTML),
+    ).toBe(initialBody);
+
+    await extractionPage.close();
+  });
+
   test("popup reports a clear error for a restricted active page", async () => {
     if (context === undefined) {
       throw new Error("The extension browser context was not initialized.");
@@ -882,6 +1183,11 @@ test.describe("unpacked Chromium extension", () => {
     await optionsPage
       .locator('input[name="openaiBaseUrl"]')
       .fill(secondBaseUrl);
+    // A saved key is bound to its origin, so moving to provider-b needs the
+    // key again (the drop-without-key path is covered by a later test).
+    await optionsPage
+      .locator('input[name="openaiApiKey"]')
+      .fill(credentialMarker);
     await instrumentOptionsPermissionCalls(optionsPage);
     await optionsPage.locator('button[data-action="save"]').click();
     await expect
@@ -1125,19 +1431,11 @@ test.describe("unpacked Chromium extension", () => {
     );
     await actionPopup.waitForStatus("已就绪。仅在你主动请求时翻译。");
     await actionPopup.click("translate");
+    const retryPageCdp = await context.newCDPSession(retryPage);
     await expect
-      .poll(() =>
-        retryPage.evaluate(() => {
-          const host = document.querySelector('[data-paralume-owned="true"]');
-          if (host === null) {
-            return undefined;
-          }
-          return host.shadowRoot
-            ?.querySelector('[role="status"]')
-            ?.textContent.trim();
-        }),
-      )
+      .poll(() => readFloatingMenuText(retryPageCdp, '[role="status"]'))
       .toContain("/");
+    await retryPageCdp.detach();
     const automaticTranslation = retryPage.locator(
       `#automatic-source + ${translationSelector}`,
     );
@@ -1253,5 +1551,583 @@ test.describe("unpacked Chromium extension", () => {
       await resumedPopup.close();
       await retryPage.close();
     }
+  });
+
+  test("floating control explains a missing API key and offers Options", async () => {
+    if (context === undefined) {
+      throw new Error("The extension browser context was not initialized.");
+    }
+
+    const savedSettings = await popupPage.evaluate(async () => {
+      const extensionApi = (
+        globalThis as unknown as {
+          chrome: {
+            runtime: { sendMessage(message: unknown): Promise<unknown> };
+          };
+        }
+      ).chrome;
+      await extensionApi.runtime.sendMessage({
+        protocolVersion: 1,
+        target: "settings",
+        command: "clear-api-key",
+        provider: "openai",
+      });
+      // Non-resolving test endpoint: no real provider can be reached even if
+      // the key check regressed.
+      return extensionApi.runtime.sendMessage({
+        protocolVersion: 1,
+        target: "settings",
+        command: "save",
+        draft: {
+          provider: "openai",
+          openai: {
+            baseUrl: "https://provider-b.example.test/openai/v1",
+            model: "strict-schema-test-model",
+            protocol: "responses",
+            reasoningEffort: "low",
+          },
+          microsoft: {
+            endpoint: "https://api.cognitive.microsofttranslator.com",
+            region: "global",
+          },
+          retry: { enabled: true, maxRetries: 2 },
+          appearance: {
+            fontFamily: "system",
+            fontSize: 16,
+            textColor: "#456257",
+            backgroundColor: "#f4f8f5",
+            lineHeight: 1.6,
+            opacity: 1,
+            verticalSpacing: 8,
+          },
+          uiLanguage: "en",
+        },
+        apiKeys: {},
+      });
+    });
+    expect(savedSettings).toMatchObject({
+      ok: true,
+      settings: { provider: "openai", openai: { apiKeyConfigured: false } },
+    });
+
+    const articlePage = await context.newPage();
+    try {
+      await articlePage.goto(fixtureUrl);
+      await articlePage.bringToFront();
+      await expect(articlePage.locator(floatingMenuSelector)).toHaveCount(1);
+      const menuCdp = await context.newCDPSession(articlePage);
+      const menuText = (selector: string) =>
+        readFloatingMenuText(menuCdp, selector);
+      const menuVisible = async (selector: string) =>
+        (await readFloatingMenuControl(menuCdp, selector))?.visible;
+      await clickFloatingMenuControl(
+        articlePage,
+        menuCdp,
+        '[data-action="expand"]',
+      );
+      await clickFloatingMenuControl(
+        articlePage,
+        menuCdp,
+        '[data-action="primary"]',
+      );
+
+      await expect
+        .poll(() => menuText("[data-error-text]"))
+        .toBe("The selected provider API key is not configured.");
+      await expect
+        .poll(() => menuText("[data-phase]"))
+        .toBe("Translation needs attention");
+      // Configuration failures render no per-segment UI on the page.
+      await expect(articlePage.locator(translationSelector)).toHaveCount(0);
+      await expect(articlePage.locator(paralumeMarkerSelector)).toHaveCount(0);
+
+      const openSettings = '[data-action="open-settings"]';
+      await expect.poll(() => menuVisible(openSettings)).toBe(true);
+      expect(await menuText(openSettings)).toBe("Open settings");
+      const optionsPagePromise = context.waitForEvent("page");
+      await clickFloatingMenuControl(articlePage, menuCdp, openSettings);
+      const optionsPage = await optionsPagePromise;
+      try {
+        await expect
+          .poll(() => optionsPage.url())
+          .toMatch(
+            new RegExp(`options\\.html|[?&]options=${extensionId}(?:&|$)`, "u"),
+          );
+      } finally {
+        await optionsPage.close();
+      }
+
+      // A new command clears the previous error before reporting its own.
+      await articlePage.bringToFront();
+      await clickFloatingMenuControl(
+        articlePage,
+        menuCdp,
+        '[data-action="toggle"]',
+      );
+      await expect.poll(() => menuVisible("[data-error]")).toBe(false);
+      await menuCdp.detach();
+    } finally {
+      await articlePage.close();
+    }
+
+    await popupPage.evaluate(async () => {
+      const extensionApi = (
+        globalThis as unknown as {
+          chrome: {
+            runtime: { sendMessage(message: unknown): Promise<unknown> };
+          };
+        }
+      ).chrome;
+      await extensionApi.runtime.sendMessage({
+        protocolVersion: 1,
+        target: "settings",
+        command: "save",
+        draft: {
+          provider: "mock",
+          openai: {
+            baseUrl: "https://provider-b.example.test/openai/v1",
+            model: "strict-schema-test-model",
+            protocol: "responses",
+            reasoningEffort: "low",
+          },
+          microsoft: {
+            endpoint: "https://api.cognitive.microsofttranslator.com",
+            region: "global",
+          },
+          retry: { enabled: true, maxRetries: 2 },
+          appearance: {
+            fontFamily: "system",
+            fontSize: 16,
+            textColor: "#456257",
+            backgroundColor: "#f4f8f5",
+            lineHeight: 1.6,
+            opacity: 1,
+            verticalSpacing: 8,
+          },
+          uiLanguage: "system",
+        },
+        apiKeys: {},
+      });
+    });
+  });
+
+  test("page scripts cannot start translations or retries with synthetic clicks", async () => {
+    if (context === undefined) {
+      throw new Error("The extension browser context was not initialized.");
+    }
+
+    const guardPage = await context.newPage();
+    const guardCdp = await context.newCDPSession(guardPage);
+    try {
+      await guardPage.goto(retryFixtureUrl);
+      await guardPage.bringToFront();
+      await expect(guardPage.locator(floatingMenuSelector)).toHaveCount(1);
+      // Mock counts attempts per source text inside the service worker, so the
+      // attempt number in the final translation proves how many provider
+      // requests this segment actually reached. Three result failures exhaust
+      // the initial request plus its two automatic retries.
+      await guardPage.evaluate(() => {
+        document.querySelector("#automatic-source")?.remove();
+        const source = document.createElement("p");
+        source.id = "guard-source";
+        source.textContent =
+          "[[PARALUME_MOCK_RESULT_FAILURE:3:SERVER_UNAVAILABLE]] Synthetic click guard fixture text.";
+        document.querySelector("main")?.prepend(source);
+      });
+
+      // Page scripts cannot reach the menu controls through the host.
+      expect(
+        await guardPage
+          .locator(floatingMenuSelector)
+          .evaluate((host) => host.shadowRoot === null),
+      ).toBe(true);
+      const expand = '[data-action="expand"]';
+      const primary = '[data-action="primary"]';
+      const primaryNode = await resolveFloatingMenuNode(guardCdp, primary);
+      expect(primaryNode?.shadowRootType).toBe("closed");
+
+      // Even with a reference (obtained here via CDP in the page's main
+      // world), synthetic clicks must not open the panel or translate.
+      await syntheticClickFloatingMenuControl(guardCdp, expand);
+      await syntheticClickFloatingMenuControl(guardCdp, primary);
+      await guardPage.waitForTimeout(1_000);
+      const primaryControl = await readFloatingMenuControl(guardCdp, primary);
+      expect(primaryControl?.visible).toBe(false);
+      await expect(guardPage.locator(translationSelector)).toHaveCount(0);
+      await expect(guardPage.locator(paralumeMarkerSelector)).toHaveCount(0);
+
+      // Trusted user input still works and consumes attempts 1-3.
+      await clickFloatingMenuControl(guardPage, guardCdp, expand);
+      await clickFloatingMenuControl(guardPage, guardCdp, primary);
+      const guardTranslation = guardPage.locator(
+        `#guard-source + ${translationSelector}`,
+      );
+      const retryButton = guardTranslation.locator(
+        '[data-paralume-retry="true"]',
+      );
+      await expect(retryButton).toBeVisible();
+      await expect(retryButton).toBeEnabled();
+
+      // The per-segment Retry lives in the page DOM; a page script's
+      // .click()/dispatchEvent must not issue a provider request.
+      await retryButton.evaluate((button: HTMLButtonElement) => {
+        button.click();
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await guardPage.waitForTimeout(1_000);
+      await expect(retryButton).toBeVisible();
+      await expect(retryButton).toBeEnabled();
+      const retryControls = guardTranslation.locator("[data-paralume-retry]");
+      await expect(retryControls).toHaveCount(1);
+
+      // A real click reaches attempt 4: no synthetic click consumed one.
+      await retryButton.click();
+      await expect(guardTranslation).toHaveText(
+        /^【Mock [^】]+ attempt 4】Synthetic click guard fixture text\.$/u,
+      );
+    } finally {
+      await guardCdp.detach();
+      await guardPage.close();
+    }
+  });
+
+  test("Retry inside a linked card neither navigates nor reaches page click handlers", async () => {
+    if (context === undefined) {
+      throw new Error("The extension browser context was not initialized.");
+    }
+
+    const cardPage = await context.newPage();
+    const cardCdp = await context.newCDPSession(cardPage);
+    try {
+      await cardPage.goto(retryFixtureUrl);
+      await cardPage.bringToFront();
+      await expect(cardPage.locator(floatingMenuSelector)).toHaveCount(1);
+      // A common card markup: the heading sits inside a link, so its
+      // translation and Retry button are rendered inside the link too. Page
+      // handlers on the card and the document stand in for framework
+      // (e.g. SPA Link / delegated onClick) listeners.
+      await cardPage.evaluate(() => {
+        document.querySelector("#automatic-source")?.remove();
+        const card = document.createElement("div");
+        card.id = "linked-card";
+        const link = document.createElement("a");
+        link.id = "linked-card-link";
+        link.href = "#linked-card-navigated";
+        const heading = document.createElement("h3");
+        heading.id = "linked-card-source";
+        heading.textContent =
+          "[[PARALUME_MOCK_RESULT_FAILURE:3:SERVER_UNAVAILABLE]] Linked card retry fixture text.";
+        link.append(heading);
+        card.append(link);
+        document.querySelector("main")?.prepend(card);
+        Reflect.set(window, "linkedCardClicks", 0);
+        Reflect.set(window, "documentClicks", 0);
+        card.addEventListener("click", () => {
+          Reflect.set(
+            window,
+            "linkedCardClicks",
+            Number(Reflect.get(window, "linkedCardClicks")) + 1,
+          );
+        });
+        document.addEventListener("click", () => {
+          Reflect.set(
+            window,
+            "documentClicks",
+            Number(Reflect.get(window, "documentClicks")) + 1,
+          );
+        });
+      });
+      const readPageClicks = () =>
+        cardPage.evaluate(() => ({
+          card: Number(Reflect.get(window, "linkedCardClicks")),
+          document: Number(Reflect.get(window, "documentClicks")),
+          hash: window.location.hash,
+        }));
+
+      await clickFloatingMenuControl(
+        cardPage,
+        cardCdp,
+        '[data-action="expand"]',
+      );
+      await clickFloatingMenuControl(
+        cardPage,
+        cardCdp,
+        '[data-action="primary"]',
+      );
+      const cardTranslation = cardPage.locator(
+        `#linked-card-source + ${translationSelector}`,
+      );
+      const retryButton = cardTranslation.locator(
+        '[data-paralume-retry="true"]',
+      );
+      await expect(retryButton).toBeEnabled();
+      // Retry really is a descendant of the page link in Chromium.
+      await expect(
+        cardPage.locator('#linked-card-link [data-paralume-retry="true"]'),
+      ).toHaveCount(1);
+      const beforeRetry = await readPageClicks();
+      expect(beforeRetry.hash).toBe("");
+
+      await retryButton.click();
+      await expect(cardTranslation).toHaveText(
+        /^【Mock [^】]+ attempt 4】Linked card retry fixture text\.$/u,
+      );
+      const afterRetry = await readPageClicks();
+      expect(afterRetry).toEqual(beforeRetry);
+      expect(cardPage.url()).toBe(retryFixtureUrl);
+
+      // The page's own link and card behavior is untouched.
+      await cardPage.locator("#linked-card-source").click();
+      await expect
+        .poll(() => readPageClicks())
+        .toEqual({
+          card: beforeRetry.card + 1,
+          document: beforeRetry.document + 1,
+          hash: "#linked-card-navigated",
+        });
+    } finally {
+      await cardCdp.detach();
+      await cardPage.close();
+    }
+  });
+
+  test("content scripts cannot use privileged settings commands or read stored keys", async () => {
+    if (context === undefined) {
+      throw new Error("The extension browser context was not initialized.");
+    }
+
+    const keyMarker = "e2e-sender-guard-key-marker";
+    const trustedOrigin = "https://provider-c.example.test/v1";
+    const sendFromExtensionPage = (message: unknown) =>
+      popupPage.evaluate(async (payload) => {
+        const extensionApi = (
+          globalThis as unknown as {
+            chrome: {
+              runtime: { sendMessage(message: unknown): Promise<unknown> };
+            };
+          }
+        ).chrome;
+        return extensionApi.runtime.sendMessage(payload);
+      }, message);
+    const draftFor = (provider: "openai" | "mock", baseUrl: string) => ({
+      provider,
+      openai: {
+        baseUrl,
+        model: "strict-schema-test-model",
+        protocol: "responses",
+        reasoningEffort: "low",
+      },
+      microsoft: {
+        endpoint: "https://api.cognitive.microsofttranslator.com",
+        region: "global",
+      },
+      retry: { enabled: true, maxRetries: 2 },
+      appearance: {
+        fontFamily: "system",
+        fontSize: 16,
+        textColor: "#456257",
+        backgroundColor: "#f4f8f5",
+        lineHeight: 1.6,
+        opacity: 1,
+        verticalSpacing: 8,
+      },
+      uiLanguage: "en",
+    });
+    const save = (
+      provider: "openai" | "mock",
+      baseUrl: string,
+      apiKeys: Record<string, string>,
+    ) =>
+      sendFromExtensionPage({
+        protocolVersion: 1,
+        target: "settings",
+        command: "save",
+        draft: draftFor(provider, baseUrl),
+        apiKeys,
+      });
+
+    // Extension pages (popup tab here) remain authorized. The endpoint never
+    // resolves, so no real provider is reachable even if a check regressed.
+    await expect(
+      save("openai", trustedOrigin, { openaiApiKey: keyMarker }),
+    ).resolves.toMatchObject({
+      ok: true,
+      settings: { openai: { apiKeyConfigured: true } },
+    });
+
+    const worker = context
+      .serviceWorkers()
+      .find((candidate) =>
+        candidate.url().startsWith(`chrome-extension://${extensionId}/`),
+      );
+    expect(worker).toBeDefined();
+    // Same call the background makes at startup; repeating it is idempotent
+    // and reports whether this Chromium supports restricting storage.local.
+    const accessLevelSupported = await worker?.evaluate(() => {
+      const storageApi = (
+        globalThis as unknown as {
+          chrome: {
+            storage: {
+              local: {
+                setAccessLevel?: (options: {
+                  accessLevel: string;
+                }) => Promise<void>;
+              };
+            };
+          };
+        }
+      ).chrome.storage.local;
+      return typeof storageApi.setAccessLevel === "function"
+        ? storageApi.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }).then(
+            () => true,
+            () => false,
+          )
+        : false;
+    });
+
+    const articlePage = await context.newPage();
+    const pageCdp = await context.newCDPSession(articlePage);
+    try {
+      await articlePage.goto(fixtureUrl);
+      // The menu only installs after the background answered get-site-state
+      // for the real content-script sender URL.
+      await expect(articlePage.locator(floatingMenuSelector)).toHaveCount(1);
+
+      const contexts: {
+        id: number;
+        name: string;
+        origin: string;
+        auxData?: { type?: string; frameId?: string };
+      }[] = [];
+      pageCdp.on("Runtime.executionContextCreated", (event) => {
+        contexts.push(event.context);
+      });
+      await pageCdp.send("Runtime.enable");
+      const { frameTree } = await pageCdp.send("Page.getFrameTree");
+      const findContentWorld = () =>
+        contexts.find(
+          (candidate) =>
+            candidate.auxData?.type === "isolated" &&
+            candidate.auxData.frameId === frameTree.frame.id &&
+            (candidate.name === "Paralume" ||
+              candidate.origin === `chrome-extension://${extensionId}`),
+        );
+      await expect.poll(() => findContentWorld()?.id).toBeDefined();
+      const contentWorld = findContentWorld();
+      if (contentWorld === undefined) {
+        throw new Error("The Paralume content-script world was not found.");
+      }
+
+      const probe = async (attackerDraft: unknown) => {
+        const extensionApi = (
+          globalThis as unknown as {
+            chrome: {
+              runtime: { sendMessage(message: unknown): Promise<unknown> };
+              storage?: {
+                local?: { get(key: string): Promise<Record<string, unknown>> };
+              };
+            };
+          }
+        ).chrome;
+        const base = { protocolVersion: 1, target: "settings" };
+        const send = (message: Record<string, unknown>) =>
+          extensionApi.runtime.sendMessage({ ...base, ...message });
+        const responses = {
+          get: await send({ command: "get" }),
+          save: await send({
+            command: "save",
+            draft: attackerDraft,
+            apiKeys: {},
+          }),
+          clear: await send({ command: "clear-api-key", provider: "openai" }),
+          test: await send({ command: "test-connection" }),
+          content: await send({ command: "get-content" }),
+          site: await send({ command: "get-site-state" }),
+        };
+        let storageReadable: boolean;
+        try {
+          const stored =
+            await extensionApi.storage?.local?.get("providerSettings");
+          storageReadable = stored?.["providerSettings"] !== undefined;
+        } catch {
+          storageReadable = false;
+        }
+        // Only booleans and protocol responses leave the content world.
+        return { responses, storageReadable };
+      };
+      const { result, exceptionDetails } = await pageCdp.send(
+        "Runtime.evaluate",
+        {
+          expression: `(${probe.toString()})(${JSON.stringify(
+            draftFor("openai", "https://attacker.example.test/v1"),
+          )})`,
+          contextId: contentWorld.id,
+          awaitPromise: true,
+          returnByValue: true,
+        },
+      );
+      expect(exceptionDetails).toBeUndefined();
+      const probed = result.value as {
+        responses: Record<string, unknown>;
+        storageReadable: boolean;
+      };
+
+      for (const command of ["get", "save", "clear", "test"]) {
+        expect(probed.responses[command]).toMatchObject({
+          ok: false,
+          error: { code: "INVALID_MESSAGE" },
+        });
+      }
+      expect(probed.responses["content"]).toMatchObject({
+        ok: true,
+        contentSettings: { uiLanguage: "en" },
+      });
+      expect(probed.responses["site"]).toEqual({
+        protocolVersion: 1,
+        ok: true,
+        siteDisabled: false,
+      });
+      expect(JSON.stringify(probed)).not.toContain(keyMarker);
+      if (accessLevelSupported === true) {
+        expect(probed.storageReadable).toBe(false);
+      } else {
+        test.info().annotations.push({
+          type: "limitation",
+          description:
+            "This Chromium rejected storage.local.setAccessLevel; content scripts can still read storage.local directly.",
+        });
+      }
+    } finally {
+      await pageCdp.detach();
+      await articlePage.close();
+    }
+
+    // Nothing the content script sent changed the stored configuration.
+    await expect(
+      sendFromExtensionPage({
+        protocolVersion: 1,
+        target: "settings",
+        command: "get",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      settings: {
+        provider: "openai",
+        openai: { baseUrl: trustedOrigin, apiKeyConfigured: true },
+      },
+    });
+
+    // Moving to another origin without a new key drops the stored key.
+    await expect(
+      save("openai", "https://provider-d.example.test/v1", {}),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: { id: "settings.savedApiKeyRemoved" },
+      settings: { openai: { apiKeyConfigured: false } },
+    });
+
+    await expect(
+      save("mock", "https://provider-d.example.test/v1", {}),
+    ).resolves.toMatchObject({ ok: true, settings: { provider: "mock" } });
   });
 });

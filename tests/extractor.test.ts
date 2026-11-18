@@ -5,7 +5,18 @@ import {
   PARALUME_SOURCE_ID_ATTRIBUTE,
 } from "../src/content/constants";
 import { extractSegments } from "../src/content/extractor";
+import { renderTranslation } from "../src/content/renderer";
 import { createContentRuntimeState } from "../src/content/state";
+import { getCurrentSourceText } from "../src/content/text";
+import type { SourceSegment, TranslationResult } from "../src/shared/types";
+
+function success(segment: SourceSegment): TranslationResult {
+  return {
+    id: segment.id,
+    status: "success",
+    translatedText: `Translated ${segment.text}`,
+  };
+}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -273,6 +284,141 @@ keywords. If the top results contain enough support, answer from those results.<
     expect(extractSegments(document, state)).toEqual([]);
   });
 
+  it("omits hidden, script, style, interactive, and editable descendants from segment text", () => {
+    document.body.innerHTML = `
+      <p id="mixed">Visible paragraph keeps its readable words <script>window.leak = "SCRIPT_SECRET_TEXT";</script><style>.STYLE_SECRET_TEXT { color: red; }</style><noscript>NOSCRIPT_SECRET</noscript><span hidden>HIDDEN_ATTRIBUTE_SECRET</span><span style="display: none">DISPLAY_NONE_SECRET</span><span aria-hidden="true">ARIA_HIDDEN_SECRET</span><button type="button">BUTTON_SECRET</button><input value="INPUT_SECRET"><span contenteditable="true">EDITABLE_SECRET</span><code>inlineCode()</code> and a normal ending.</p>
+    `;
+
+    const extracted = extractSegments(
+      document,
+      createContentRuntimeState({ runtimeId: "hidden-descendants" }),
+    );
+
+    expect(extracted.map(({ segment }) => segment.text)).toEqual([
+      "Visible paragraph keeps its readable words inlineCode() and a normal ending.",
+    ]);
+  });
+
+  it("does not make a block eligible through hidden descendant text alone", () => {
+    document.body.innerHTML = `
+      <p>Tiny <span style="display: none">but hidden text is long enough</span></p>
+    `;
+
+    expect(
+      extractSegments(
+        document,
+        createContentRuntimeState({ runtimeId: "hidden-only" }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("separates adjacent block children instead of gluing their text", () => {
+    document.body.innerHTML = `<ul><li id="glued"><div>First glued sentence.</div><div>Second glued sentence.</div></li></ul>`;
+
+    const extracted = extractSegments(
+      document,
+      createContentRuntimeState({ runtimeId: "block-separators" }),
+    );
+
+    expect(extracted.map(({ element }) => element.id)).toEqual(["glued"]);
+    expect(extracted[0]?.segment.text).toBe(
+      "First glued sentence. Second glued sentence.",
+    );
+  });
+
+  it("splits nested lists into their own items and keeps the parent's loose text", () => {
+    document.body.innerHTML = `
+      <ul>
+        <li id="outer">Outer list item introduction text
+          <ul>
+            <li id="inner-one">Inner list item number one</li>
+            <li id="inner-two">Inner list item number two</li>
+          </ul>
+        </li>
+        <li id="code-item">List item explaining the snippet below<pre id="code-pre">const snippet = "kept apart";</pre></li>
+      </ul>
+    `;
+
+    const extracted = extractSegments(
+      document,
+      createContentRuntimeState({ runtimeId: "nested-lists" }),
+    );
+
+    expect(
+      Object.fromEntries(
+        extracted.map(({ element, segment }) => [element.id, segment.text]),
+      ),
+    ).toEqual({
+      outer: "Outer list item introduction text",
+      "inner-one": "Inner list item number one",
+      "inner-two": "Inner list item number two",
+      "code-item": "List item explaining the snippet below",
+      "code-pre": 'const snippet = "kept apart";',
+    });
+  });
+
+  it("splits layout table cells that wrap nested tables or several blocks", () => {
+    document.body.innerHTML = `
+      <table><tbody><tr><td id="layout-cell">
+        <table><tbody>
+          <tr><td id="story-title">Layout table story title text</td></tr>
+          <tr><td id="story-meta">Layout table story metadata line</td></tr>
+        </tbody></table>
+      </td></tr></tbody></table>
+      <table><tbody><tr><td id="article-cell">
+        <p id="paragraph-one">Layout cell paragraph number one.</p>
+        <p id="paragraph-two">Layout cell paragraph number two.</p>
+      </td></tr></tbody></table>
+    `;
+
+    const extracted = extractSegments(
+      document,
+      createContentRuntimeState({ runtimeId: "layout-tables" }),
+    );
+
+    expect(
+      Object.fromEntries(
+        extracted.map(({ element, segment }) => [element.id, segment.text]),
+      ),
+    ).toEqual({
+      "story-title": "Layout table story title text",
+      "story-meta": "Layout table story metadata line",
+      "paragraph-one": "Layout cell paragraph number one.",
+      "paragraph-two": "Layout cell paragraph number two.",
+    });
+  });
+
+  it("keeps compound container sources stable once translations are inserted", () => {
+    document.body.innerHTML = `
+      <ul>
+        <li id="outer">Outer list item introduction text
+          <ul><li id="inner">Inner list item number one</li></ul>
+        </li>
+      </ul>
+    `;
+    const state = createContentRuntimeState({ runtimeId: "compound-stable" });
+    const first = extractSegments(document, state);
+    expect(first.map(({ element }) => element.id)).toEqual(["outer", "inner"]);
+
+    for (const { element, segment } of first) {
+      const translation = document.createElement("div");
+      translation.textContent = `Translated ${segment.text}`;
+      element.append(translation);
+      state.ownedNodes.add(translation);
+      state.sourceMarkers.set(element, {
+        segmentId: segment.id,
+        attributeAdded: false,
+        sourceText: segment.text,
+      });
+    }
+
+    for (const { element, segment } of first) {
+      expect(getCurrentSourceText(element, state)).toBe(segment.text);
+    }
+    expect(extractSegments(document, state)).toEqual([]);
+    expect(state.sourceMarkers.size).toBe(2);
+  });
+
   it("requires at least eight meaningful letters or numbers", () => {
     document.body.innerHTML = `
       <h2>Short!</h2>
@@ -315,5 +461,129 @@ keywords. If the top results contain enough support, answer from those results.<
     expect(new Set(first).size).toBe(2);
     expect(sources.map((source) => secondByElement.get(source))).toEqual(first);
     expect(first.every((id) => id.startsWith("segment-"))).toBe(true);
+  });
+});
+
+describe("extractSegments mixed loose text and nested blocks", () => {
+  function textsById(runtimeId: string): Record<string, string> {
+    return Object.fromEntries(
+      extractSegments(document, createContentRuntimeState({ runtimeId })).map(
+        ({ element, segment }) => [element.id, segment.text],
+      ),
+    );
+  }
+
+  it("keeps short nested blocks inside their list item or table cell", () => {
+    document.body.innerHTML = `
+      <ul><li id="item"><p>Step one opens the settings page</p><p>Done.</p></li></ul>
+      <table><tbody><tr>
+        <td id="cell">Total amount due today <p>$5</p><p>USD</p></td>
+      </tr></tbody></table>
+    `;
+
+    expect(textsById("short-nested")).toEqual({
+      item: "Step one opens the settings page Done.",
+      cell: "Total amount due today $5 USD",
+    });
+  });
+
+  it("translates a container's loose text once without its nested blocks", () => {
+    document.body.innerHTML = `
+      <blockquote id="quote">Quote introduction loose text <p id="quoted">Quoted paragraph text here</p></blockquote>
+      <ul><li id="item">
+        <blockquote id="item-quote">Nested quote loose text<p id="item-quoted">Nested quoted paragraph</p></blockquote>
+        <p id="item-paragraph">Another paragraph in the item</p>
+      </li></ul>
+    `;
+
+    expect(textsById("loose-text")).toEqual({
+      quote: "Quote introduction loose text",
+      quoted: "Quoted paragraph text here",
+      "item-quote": "Nested quote loose text",
+      "item-quoted": "Nested quoted paragraph",
+      "item-paragraph": "Another paragraph in the item",
+    });
+  });
+
+  it("is idempotent for containers with loose text once they are translated", () => {
+    document.body.innerHTML = `
+      <blockquote id="quote">Quote introduction loose text <p id="quoted">Quoted paragraph text here</p></blockquote>
+    `;
+    const state = createContentRuntimeState({ runtimeId: "loose-idempotent" });
+    const first = extractSegments(document, state);
+    for (const extracted of first) {
+      renderTranslation(extracted, success(extracted.segment), state);
+    }
+
+    expect(first.map(({ element }) => element.id)).toEqual(["quote", "quoted"]);
+    expect(extractSegments(document, state)).toEqual([]);
+  });
+
+  it("drops nested translations when a compound item becomes merged", () => {
+    document.body.innerHTML = `
+      <ul><li id="item">Item introduction loose text
+        <p id="first">First nested paragraph text</p>
+        <p id="second">Second nested paragraph text</p>
+      </li></ul>
+    `;
+    const state = createContentRuntimeState({ runtimeId: "compound-merge" });
+    const first = extractSegments(document, state);
+    expect(first.map(({ element }) => element.id)).toEqual([
+      "item",
+      "first",
+      "second",
+    ]);
+    for (const extracted of first) {
+      renderTranslation(extracted, success(extracted.segment), state);
+    }
+
+    expect(document.body.textContent).toContain(
+      "Translated First nested paragraph text",
+    );
+
+    // The page removes one nested block; the item now owns the other one.
+    document.querySelector("#second")?.remove();
+    const second = extractSegments(document, state);
+
+    expect(
+      second.map(({ element, segment }) => [element.id, segment.text]),
+    ).toEqual([
+      ["item", "Item introduction loose text First nested paragraph text"],
+    ]);
+    const firstParagraph = document.querySelector<HTMLElement>("#first");
+    expect(
+      firstParagraph !== null && state.sourceMarkers.has(firstParagraph),
+    ).toBe(false);
+    expect(document.body.textContent).not.toContain(
+      "Translated First nested paragraph text",
+    );
+  });
+});
+
+describe("extractSegments content-visibility", () => {
+  it("skips content-visibility: hidden on the block, an ancestor, or a non-inline descendant", () => {
+    document.body.innerHTML = `
+      <section style="content-visibility: hidden">
+        <p id="ancestor-hidden">ANCESTOR_CV_SECRET recovery phrase text</p>
+      </section>
+      <p id="self-hidden" style="content-visibility: hidden">SELF_CV_SECRET paragraph text</p>
+      <p id="mixed">Visible part of the paragraph <span style="display: inline-block; content-visibility: hidden">DESCENDANT_CV_SECRET</span><span style="display: inline; content-visibility: hidden">kept inline</span> and its ending.</p>
+      <p id="auto" style="content-visibility: auto">Deferred but readable paragraph</p>
+    `;
+
+    const extracted = extractSegments(
+      document,
+      createContentRuntimeState({ runtimeId: "content-visibility" }),
+    );
+
+    expect(
+      Object.fromEntries(
+        extracted.map(({ element, segment }) => [element.id, segment.text]),
+      ),
+    ).toEqual({
+      // content-visibility has no effect on a plain inline box.
+      mixed: "Visible part of the paragraph kept inline and its ending.",
+      auto: "Deferred but readable paragraph",
+    });
   });
 });
