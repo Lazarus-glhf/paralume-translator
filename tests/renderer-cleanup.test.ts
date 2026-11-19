@@ -523,6 +523,7 @@ describe("translation visibility and cleanup", () => {
       translationCount: 1,
       failureCount: 0,
       visible: false,
+      working: false,
     });
 
     setTranslationsVisible(document, state, true);

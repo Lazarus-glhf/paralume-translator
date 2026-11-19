@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App as OptionsApp } from "../entrypoints/options/App";
 import { App as PopupApp } from "../entrypoints/popup/App";
-import type { ContentResponse } from "../src/messaging/protocol";
+import type {
+  ContentCommand,
+  ContentResponse,
+} from "../src/messaging/protocol";
 import type { OptionsClient } from "../src/options/client";
 import {
   DEFAULT_APPEARANCE_SETTINGS,
@@ -78,12 +81,79 @@ afterEach(() => {
 });
 
 describe("localized Popup", () => {
+  it("refreshes a reopened popup when work finishes without overwriting a newer action", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolvePoll: ((value: ContentResponse) => void) | undefined;
+      const state = {
+        translationCount: 1,
+        failureCount: 0,
+        visible: true,
+        working: true,
+      };
+      let reads = 0;
+      const runCommand = vi.fn(
+        (command: ContentCommand): Promise<ContentResponse> => {
+          if (command === "status" && ++reads === 2) {
+            return new Promise((resolve) => {
+              resolvePoll = resolve;
+            });
+          }
+          return Promise.resolve({
+            protocolVersion: 1,
+            ok: true,
+            state: { ...state },
+            message: { id: "popup.ready" },
+          });
+        },
+      );
+      const popup = render(
+        <PopupApp
+          runCommand={runCommand}
+          loadSiteState={() => Promise.resolve(undefined)}
+          loadContentSettings={() => Promise.resolve(contentSettings())}
+        />,
+      );
+      await flushEffects();
+      expect(popup.querySelector('[data-action="stop"]')).not.toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(750);
+      });
+      state.working = false;
+      await act(async () => {
+        resolvePoll?.({
+          protocolVersion: 1,
+          ok: true,
+          state: { ...state, translationCount: 2 },
+          message: { id: "popup.ready" },
+        });
+        await Promise.resolve();
+      });
+      expect(popup.querySelector('[data-action="translate"]')).not.toBeNull();
+      expect(popup.textContent).toContain("Translations: 2");
+      state.visible = false;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(750);
+      });
+      expect(popup.querySelector('[data-action="toggle"]')?.textContent).toBe(
+        "Show translations",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("loads page state without translating when the toolbar popup opens", async () => {
     const runCommand = vi.fn(() =>
       Promise.resolve<ContentResponse>({
         protocolVersion: 1,
         ok: true,
-        state: { translationCount: 1, failureCount: 0, visible: true },
+        state: {
+          translationCount: 1,
+          failureCount: 0,
+          visible: true,
+          working: false,
+        },
         message: {
           id: "content.translationSummary",
           values: { succeeded: 1, failed: 0 },
@@ -93,6 +163,7 @@ describe("localized Popup", () => {
     render(
       <PopupApp
         runCommand={runCommand}
+        loadSiteState={() => Promise.resolve(undefined)}
         loadContentSettings={() => Promise.resolve(contentSettings())}
       />,
     );
@@ -113,6 +184,7 @@ describe("localized Popup", () => {
           })
         }
         loadContentSettings={() => Promise.resolve(contentSettings())}
+        loadSiteState={() => Promise.resolve(undefined)}
       />,
     );
     const translate = popup.querySelector<HTMLButtonElement>(
@@ -124,7 +196,12 @@ describe("localized Popup", () => {
       resolveStatus?.({
         protocolVersion: 1,
         ok: true,
-        state: { translationCount: 0, failureCount: 0, visible: true },
+        state: {
+          translationCount: 0,
+          failureCount: 0,
+          visible: true,
+          working: false,
+        },
         message: { id: "popup.ready" },
       });
       await Promise.resolve();
@@ -135,7 +212,8 @@ describe("localized Popup", () => {
   it("runs accessible English actions and formats stable status identifiers", async () => {
     const runCommand = vi.fn(
       (
-        command: "status" | "translate" | "retry-failed" | "toggle" | "clear",
+        command:
+          "status" | "translate" | "retry-failed" | "stop" | "toggle" | "clear",
       ): Promise<ContentResponse> =>
         Promise.resolve({
           protocolVersion: 1,
@@ -144,6 +222,7 @@ describe("localized Popup", () => {
             translationCount: command === "clear" ? 0 : 2,
             failureCount: 0,
             visible: command !== "toggle",
+            working: false,
           },
           message:
             command === "translate"
@@ -161,6 +240,7 @@ describe("localized Popup", () => {
         autoStart={false}
         runCommand={runCommand}
         loadContentSettings={() => Promise.resolve(contentSettings())}
+        loadSiteState={() => Promise.resolve(undefined)}
         getBrowserUiLanguage={() => "en-US"}
       />,
     );
@@ -198,6 +278,7 @@ describe("localized Popup", () => {
     const popup = render(
       <PopupApp
         autoStart={false}
+        loadSiteState={() => Promise.resolve(undefined)}
         loadContentSettings={() =>
           Promise.resolve(contentSettings({ uiLanguage: "zh-CN" }))
         }
@@ -218,7 +299,7 @@ describe("localized Popup", () => {
     await flushEffects();
 
     expect(popup.textContent).toContain("翻译页面");
-    expect(popup.textContent).toContain("显示 / 隐藏");
+    expect(popup.textContent).toContain("隐藏译文");
     await act(async () => {
       popup
         .querySelector<HTMLButtonElement>('button[data-action="translate"]')
@@ -236,6 +317,7 @@ describe("localized Popup", () => {
     const popup = render(
       <PopupApp
         autoStart={false}
+        loadSiteState={() => Promise.resolve(undefined)}
         loadContentSettings={() => Promise.resolve(contentSettings())}
         getBrowserUiLanguage={() => "en-US"}
         runCommand={() =>
@@ -254,9 +336,16 @@ describe("localized Popup", () => {
     });
     expect(popup.querySelector("main")?.getAttribute("aria-busy")).toBe("true");
     expect(
-      Array.from(popup.querySelectorAll<HTMLButtonElement>("button")).every(
-        (button) => button.disabled,
-      ),
+      popup.querySelector<HTMLButtonElement>('button[data-action="stop"]')
+        ?.disabled,
+    ).toBe(false);
+    expect(
+      popup.querySelector<HTMLButtonElement>('button[data-action="toggle"]')
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      popup.querySelector<HTMLButtonElement>('button[data-action="clear"]')
+        ?.disabled,
     ).toBe(true);
     expect(popup.textContent).toContain("Translating…");
 
@@ -272,6 +361,115 @@ describe("localized Popup", () => {
       "false",
     );
   });
+
+  it("keeps Stop usable while Translate is pending and ignores the stale Translate response", async () => {
+    let resolveTranslate: ((response: ContentResponse) => void) | undefined;
+    const runCommand = vi.fn((command: ContentCommand) => {
+      if (command === "translate") {
+        return new Promise<ContentResponse>((resolve) => {
+          resolveTranslate = resolve;
+        });
+      }
+      if (command === "stop") {
+        return Promise.resolve<ContentResponse>({
+          protocolVersion: 1,
+          ok: true,
+          state: {
+            translationCount: 1,
+            failureCount: 0,
+            visible: true,
+            working: false,
+          },
+          message: { id: "content.stopped", values: { count: 1 } },
+        });
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    const popup = render(
+      <PopupApp
+        autoStart={false}
+        runCommand={runCommand}
+        loadContentSettings={() => Promise.resolve(contentSettings())}
+        loadSiteState={() => Promise.resolve(undefined)}
+      />,
+    );
+    await flushEffects();
+
+    act(() => {
+      popup
+        .querySelector<HTMLButtonElement>('button[data-action="translate"]')
+        ?.click();
+    });
+    const stop = popup.querySelector<HTMLButtonElement>(
+      'button[data-action="stop"]',
+    );
+    expect(stop?.disabled).toBe(false);
+    expect(stop?.textContent).toBe("Stop translation");
+
+    await act(async () => {
+      stop?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(runCommand.mock.calls.map(([command]) => command)).toEqual([
+      "translate",
+      "stop",
+    ]);
+    expect(popup.textContent).toContain(
+      "Stopped translation and kept 1 rendered translations.",
+    );
+    expect(
+      popup.querySelector<HTMLButtonElement>('button[data-action="translate"]'),
+    ).not.toBeNull();
+
+    await act(async () => {
+      resolveTranslate?.({
+        protocolVersion: 1,
+        ok: true,
+        state: {
+          translationCount: 0,
+          failureCount: 0,
+          visible: true,
+          working: false,
+        },
+        message: { id: "content.cancelledByStop" },
+      });
+      await Promise.resolve();
+    });
+    expect(popup.textContent).toContain(
+      "Stopped translation and kept 1 rendered translations.",
+    );
+    expect(popup.textContent).toContain("Translations: 1");
+  });
+
+  it("shows a disabled current site and restores its floating controls permanently", async () => {
+    const enableSite = vi.fn(() => Promise.resolve());
+    const popup = render(
+      <PopupApp
+        autoStart={false}
+        loadContentSettings={() => Promise.resolve(contentSettings())}
+        loadSiteState={() =>
+          Promise.resolve({ site: "news.example.com", disabled: true })
+        }
+        enableSite={enableSite}
+      />,
+    );
+    await flushEffects();
+    expect(popup.textContent).toContain(
+      "Floating controls are disabled on news.example.com",
+    );
+
+    await act(async () => {
+      popup
+        .querySelector<HTMLButtonElement>('button[data-action="enable-site"]')
+        ?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(enableSite).toHaveBeenCalledExactlyOnceWith("news.example.com");
+    expect(popup.querySelector('[data-testid="site-disabled"]')).toBeNull();
+    expect(popup.textContent).toContain("Reload this page to show them again.");
+  });
 });
 
 describe("localized Options", () => {
@@ -282,6 +480,8 @@ describe("localized Options", () => {
       save: vi.fn(),
       clearApiKey: vi.fn(),
       testConnection: vi.fn(),
+      listDisabledSites: vi.fn(() => Promise.resolve([])),
+      enableSite: vi.fn(),
     };
     const options = render(
       <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,
@@ -338,6 +538,8 @@ describe("localized Options", () => {
       save: vi.fn(),
       clearApiKey: vi.fn(),
       testConnection: vi.fn(),
+      listDisabledSites: vi.fn(() => Promise.resolve([])),
+      enableSite: vi.fn(),
     };
     const options = render(
       <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,
@@ -366,6 +568,66 @@ describe("localized Options", () => {
     ).toBe(String(DEFAULT_APPEARANCE_SETTINGS.opacity));
   });
 
+  it("lists disabled sites, restores one without confirmation, and explains reload", async () => {
+    const loaded = publicSettings();
+    const enableSite = vi.fn(() => Promise.resolve());
+    const client: OptionsClient = {
+      load: vi.fn(() => Promise.resolve(loaded)),
+      save: vi.fn(),
+      clearApiKey: vi.fn(),
+      testConnection: vi.fn(),
+      listDisabledSites: vi.fn(() =>
+        Promise.resolve(["a.example", "b.example"]),
+      ),
+      enableSite,
+    };
+    const options = render(
+      <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,
+    );
+    await flushEffects();
+    expect(options.textContent).toContain("a.example");
+    expect(options.textContent).toContain("b.example");
+
+    await act(async () => {
+      options
+        .querySelector<HTMLButtonElement>('button[data-site="a.example"]')
+        ?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(enableSite).toHaveBeenCalledExactlyOnceWith("a.example");
+    expect(options.textContent).not.toContain("a.exampleRestore");
+    expect(options.textContent).toContain(
+      "Reload that site to show them again.",
+    );
+  });
+
+  it("shows disabled-site storage failures without hiding provider settings", async () => {
+    const loaded = publicSettings();
+    const client: OptionsClient = {
+      load: vi.fn(() => Promise.resolve(loaded)),
+      save: vi.fn(),
+      clearApiKey: vi.fn(),
+      testConnection: vi.fn(),
+      listDisabledSites: vi.fn(() =>
+        Promise.reject(new Error("private storage details")),
+      ),
+      enableSite: vi.fn(),
+    };
+    const options = render(
+      <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,
+    );
+    await flushEffects();
+    expect(options.textContent).toContain(
+      "Disabled sites could not be loaded.",
+    );
+    expect(options.textContent).toContain(
+      "Paralume could not complete the request.",
+    );
+    expect(options.textContent).not.toContain("private storage details");
+    expect(options.querySelector('button[data-action="save"]')).not.toBeNull();
+  });
+
   it("submits retry, appearance, language, and replacement keys with localized status", async () => {
     const loaded = publicSettings();
     const saved = {
@@ -388,6 +650,8 @@ describe("localized Options", () => {
         }),
       ),
       testConnection: vi.fn(),
+      listDisabledSites: vi.fn(() => Promise.resolve([])),
+      enableSite: vi.fn(),
     };
     const options = render(
       <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,
@@ -443,6 +707,8 @@ describe("localized Options", () => {
       ),
       clearApiKey: vi.fn(),
       testConnection: vi.fn(),
+      listDisabledSites: vi.fn(() => Promise.resolve([])),
+      enableSite: vi.fn(),
     };
     const options = render(
       <OptionsApp client={client} getBrowserUiLanguage={() => "en-US"} />,

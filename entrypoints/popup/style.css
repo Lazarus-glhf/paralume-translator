@@ -80,6 +80,31 @@ h1 {
   font-size: 0.75rem;
 }
 
+.site-disabled {
+  margin-bottom: 12px;
+  padding: 11px 12px;
+  border: 1px solid #dedcfb;
+  border-radius: 12px;
+  background: #f2f1ff;
+}
+
+.site-disabled p {
+  margin: 0 0 9px;
+  color: #5145cd;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.site-disabled button {
+  min-height: 34px;
+  padding-block: 6px;
+  font-size: 0.76rem;
+}
+
+.site-status {
+  margin-bottom: 12px;
+}
+
 button {
   min-height: 40px;
   padding: 9px 13px;
@@ -193,6 +218,15 @@ button:disabled {
   .status {
     border-color: #44406f;
     background: #292741;
+    color: #c9c4ff;
+  }
+
+  .site-disabled {
+    border-color: #44406f;
+    background: #292741;
+  }
+
+  .site-disabled p {
     color: #c9c4ff;
   }
 }

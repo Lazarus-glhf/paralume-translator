@@ -174,6 +174,9 @@ export function createContentController(
     dependencies.browserUiLanguage?.(),
   );
   const manualRetries = new Map<string, ActiveManualRetry>();
+  const workTokens = new Set<symbol>();
+  const workGenerations = new Map<symbol, number>();
+  const cancellationReasons = new Map<number, "clear" | "stop">();
   const issuedOperationIds = new Set<string>();
   const streamingOperations = new Map<
     string,
@@ -182,6 +185,35 @@ export function createContentController(
   let liveProgress:
     | { generation: number; total: number; completedIds: Set<string> }
     | undefined;
+
+  const beginWork = (): symbol => {
+    const token = Symbol("translation-work");
+    workTokens.add(token);
+    workGenerations.set(token, operationGeneration);
+    dependencies.state.working = true;
+    return token;
+  };
+
+  const endWork = (token: symbol): void => {
+    const generation = workGenerations.get(token);
+    workGenerations.delete(token);
+    workTokens.delete(token);
+    dependencies.state.working = workTokens.size > 0;
+    if (
+      generation !== undefined &&
+      !Array.from(workGenerations.values()).includes(generation)
+    ) {
+      cancellationReasons.delete(generation);
+    }
+  };
+
+  const refreshResponseState = (response: ContentResponse): ContentResponse =>
+    response.ok
+      ? {
+          ...response,
+          state: getContentState(dependencies.document, dependencies.state),
+        }
+      : response;
 
   const nextOperationId = (): string => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -256,8 +288,15 @@ export function createContentController(
     return promise;
   };
 
-  const cancelled = (): ContentResponse =>
-    success(dependencies, createMessage("content.cancelled"));
+  const cancelled = (generation: number): ContentResponse =>
+    success(
+      dependencies,
+      createMessage(
+        cancellationReasons.get(generation) === "stop"
+          ? "content.cancelledByStop"
+          : "content.cancelled",
+      ),
+    );
 
   const cancelOperation = (operationId: string): void => {
     if (dependencies.cancelTranslation === undefined) {
@@ -406,18 +445,43 @@ export function createContentController(
     }
     const generation = operationGeneration;
     const operationId = nextOperationId();
+    const wasWorking = dependencies.state.working;
+    const workToken = beginWork();
+    if (!wasWorking) {
+      dependencies.onProgress?.({
+        phase: "translating",
+        completed: 0,
+        total: 1,
+      });
+    }
     const promise = performManualRetry(extracted, generation, operationId);
     const operation: ActiveManualRetry = { operationId, promise };
     manualRetries.set(id, operation);
     void promise.then(
       () => {
+        endWork(workToken);
         if (manualRetries.get(id) === operation) {
           manualRetries.delete(id);
         }
+        if (generation === operationGeneration) {
+          dependencies.onProgress?.({
+            phase: dependencies.state.working ? "translating" : "complete",
+            completed: 1,
+            total: 1,
+          });
+        }
       },
       () => {
+        endWork(workToken);
         if (manualRetries.get(id) === operation) {
           manualRetries.delete(id);
+        }
+        if (generation === operationGeneration) {
+          dependencies.onProgress?.({
+            phase: dependencies.state.working ? "translating" : "error",
+            completed: 0,
+            total: 1,
+          });
         }
       },
     );
@@ -690,7 +754,7 @@ export function createContentController(
         ),
       );
       if (generation !== operationGeneration) {
-        return cancelled();
+        return cancelled(generation);
       }
       // Segments rendered from streamed results of a batch that later failed
       // are in the live count but not in the per-batch tallies; the terminal
@@ -729,7 +793,7 @@ export function createContentController(
       );
     } catch (error) {
       if (generation !== operationGeneration) {
-        return cancelled();
+        return cancelled(generation);
       }
       return createErrorResponse(sanitizeError(error, "TRANSLATION_FAILED"));
     }
@@ -742,15 +806,26 @@ export function createContentController(
 
     const generation = operationGeneration;
     const operationIds = new Set<string>([nextOperationId()]);
+    const workToken = beginWork();
     const settingsRefresh = refreshSettings(generation);
-    const promise =
+    const workPromise =
       settingsRefresh === true
         ? performTranslate(generation, operationIds)
         : settingsRefresh.then((settingsReady) =>
             settingsReady && generation === operationGeneration
               ? performTranslate(generation, operationIds)
-              : cancelled(),
+              : cancelled(generation),
           );
+    const promise = workPromise.then(
+      (response) => {
+        endWork(workToken);
+        return refreshResponseState(response);
+      },
+      (error: unknown) => {
+        endWork(workToken);
+        throw error;
+      },
+    );
     const operation: ActiveTranslation = {
       generation,
       operationIds,
@@ -813,6 +888,7 @@ export function createContentController(
     const generation = operationGeneration;
     const operationId = nextOperationId();
     const operationIds = new Set([operationId]);
+    const workToken = beginWork();
     for (const item of failed) {
       setTranslationPending(item.translation, dependencies.state, true, locale);
     }
@@ -821,7 +897,7 @@ export function createContentController(
       completed: 0,
       total: failed.length,
     });
-    const promise = dependencies
+    const workPromise = dependencies
       .requestTranslations(
         {
           sourceLanguage: "auto",
@@ -831,7 +907,7 @@ export function createContentController(
         operationId,
       )
       .then((rawResponse) => {
-        if (generation !== operationGeneration) return cancelled();
+        if (generation !== operationGeneration) return cancelled(generation);
         const parsed = parseTranslationResponse(rawResponse);
         if (!parsed.ok) {
           for (const item of failed) {
@@ -913,7 +989,7 @@ export function createContentController(
       .catch((error: unknown) => {
         // Clear already reset progress and removed these failures; a late
         // rejection from the cancelled request must not report an error.
-        if (generation !== operationGeneration) return cancelled();
+        if (generation !== operationGeneration) return cancelled(generation);
         for (const item of failed) {
           setTranslationPending(
             item.translation,
@@ -932,6 +1008,16 @@ export function createContentController(
       .finally(() => {
         operationIds.delete(operationId);
       });
+    const promise = workPromise.then(
+      (response) => {
+        endWork(workToken);
+        return refreshResponseState(response);
+      },
+      (error: unknown) => {
+        endWork(workToken);
+        throw error;
+      },
+    );
     const operation: ActiveTranslation = { generation, operationIds, promise };
     activeBulkRetry = operation;
     void promise.finally(() => {
@@ -954,7 +1040,7 @@ export function createContentController(
     );
   };
 
-  const clear = (): ContentResponse => {
+  const cancelActiveWork = (reason: "clear" | "stop"): Set<string> => {
     const operationIds = new Set<string>();
     if (activeTranslation !== undefined) {
       for (const operationId of activeTranslation.operationIds) {
@@ -970,20 +1056,53 @@ export function createContentController(
       operationIds.add(retry.operationId);
     }
 
+    const cancelledGeneration = operationGeneration;
+    if (Array.from(workGenerations.values()).includes(cancelledGeneration)) {
+      cancellationReasons.set(cancelledGeneration, reason);
+    }
     operationGeneration += 1;
     streamingOperations.clear();
     activeTranslation = undefined;
     activeBulkRetry = undefined;
     activeSettingsRefresh = undefined;
     manualRetries.clear();
+    workTokens.clear();
+    dependencies.state.working = false;
     for (const operationId of operationIds) {
       cancelOperation(operationId);
     }
+    return operationIds;
+  };
+
+  const stop = (): ContentResponse => {
+    const wasWorking = dependencies.state.working;
+    const operationIds = cancelActiveWork("stop");
+    for (const translation of dependencies.state.translations) {
+      setTranslationPending(translation, dependencies.state, false, locale);
+    }
     dependencies.onProgress?.({ phase: "idle", completed: 0, total: 0 });
+    const state = getContentState(dependencies.document, dependencies.state);
+    return success(
+      dependencies,
+      createMessage(
+        wasWorking || operationIds.size > 0
+          ? "content.stopped"
+          : "content.stopEmpty",
+        wasWorking || operationIds.size > 0
+          ? { count: state.translationCount }
+          : undefined,
+      ),
+    );
+  };
+
+  const clear = (): ContentResponse => {
+    const operationIds = cancelActiveWork("clear");
+    dependencies.state.translationsVisible = true;
     const removed = clearTranslations(
       dependencies.document,
       dependencies.state,
     );
+    dependencies.onProgress?.({ phase: "idle", completed: 0, total: 0 });
 
     let message: MessageDescriptor;
     if (removed === 0) {
@@ -1011,12 +1130,21 @@ export function createContentController(
       switch (parsed.value.command) {
         case "status":
           return Promise.resolve(
-            success(dependencies, createMessage("popup.ready")),
+            success(
+              dependencies,
+              createMessage(
+                dependencies.state.working
+                  ? "popup.translating"
+                  : "popup.ready",
+              ),
+            ),
           );
         case "translate":
           return translate();
         case "retry-failed":
           return retryFailed();
+        case "stop":
+          return Promise.resolve(stop());
         case "toggle":
           return Promise.resolve(toggle());
         case "clear":

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { installFloatingMenu } from "../src/content/floating-menu";
+import type { ContentCommand } from "../src/messaging/protocol";
+import { createError } from "../src/shared/errors";
 import { captureShadowRoots, trustedClick } from "./helpers/dom";
 
 afterEach(() => {
@@ -10,7 +12,7 @@ afterEach(() => {
   }
 });
 
-type MenuCommand = "status" | "translate" | "retry-failed" | "toggle" | "clear";
+type MenuCommand = ContentCommand;
 
 function installWithShadow(...args: Parameters<typeof installFloatingMenu>): {
   menu: ReturnType<typeof installFloatingMenu>;
@@ -113,6 +115,7 @@ describe("page floating menu", () => {
     expect(shadow.querySelector('[role="status"]')?.textContent).toContain(
       "4 / 15",
     );
+    expect(control(shadow, "primary").textContent).toBe("停止翻译");
     trustedClick(control(shadow, "expand"));
     expect(shadow.querySelector("[data-panel]")?.hasAttribute("hidden")).toBe(
       false,
@@ -128,16 +131,55 @@ describe("page floating menu", () => {
     ]);
   });
 
+  it("validates and displays localized success descriptors with explicit visibility labels", async () => {
+    const runCommand = vi.fn(() =>
+      Promise.resolve({
+        protocolVersion: 1,
+        ok: true,
+        state: {
+          translationCount: 3,
+          failureCount: 1,
+          visible: false,
+          working: false,
+        },
+        message: {
+          id: "content.translationSummaryOmitted",
+          values: { succeeded: 2, failed: 1, omitted: 4 },
+        },
+      }),
+    );
+    const { menu, shadow } = installWithShadow(document, runCommand, "en");
+
+    trustedClick(control(shadow, "primary"));
+    await vi.waitFor(() => {
+      expect(shadow.querySelector("[data-phase]")?.textContent).toContain(
+        "Translated 2 readable blocks; 1 unavailable; 4 additional blocks were skipped.",
+      );
+    });
+    expect(control(shadow, "toggle").textContent).toBe("Show translations");
+    expect(control(shadow, "retry-failed").hidden).toBe(false);
+
+    menu.setResponse({
+      protocolVersion: 1,
+      ok: true,
+      state: {
+        translationCount: 3,
+        failureCount: 0,
+        visible: true,
+        working: true,
+      },
+      message: { id: "popup.translating" },
+    });
+    expect(control(shadow, "primary").textContent).toBe("Stop translation");
+    expect(control(shadow, "toggle").textContent).toBe("Hide translations");
+  });
+
   it("shows the localized error reason and an Open settings action for configuration failures", async () => {
     const runCommand = vi.fn(() =>
       Promise.resolve({
         protocolVersion: 1,
         ok: false,
-        error: {
-          code: "API_KEY_UNCONFIGURED",
-          message: "UNTRUSTED_RESPONSE_TEXT",
-          retryable: false,
-        },
+        error: createError("API_KEY_UNCONFIGURED"),
       }),
     );
     const openSettings = vi.fn(() => Promise.resolve());
@@ -190,11 +232,7 @@ describe("page floating menu", () => {
       .mockResolvedValueOnce({
         protocolVersion: 1,
         ok: false,
-        error: {
-          code: "REQUEST_TIMEOUT",
-          message: "ignored",
-          retryable: true,
-        },
+        error: createError("REQUEST_TIMEOUT"),
       })
       .mockResolvedValueOnce({
         protocolVersion: 1,
@@ -223,7 +261,7 @@ describe("page floating menu", () => {
       ok: false,
       error: {
         code: "API_KEY_UNCONFIGURED",
-        message: "ignored",
+        message: "untrusted malformed message",
         retryable: false,
       },
     });
@@ -237,7 +275,8 @@ describe("page floating menu", () => {
       expect(runCommand).toHaveBeenCalledTimes(3);
     });
     await Promise.resolve();
-    expect(notice?.hidden).toBe(true);
+    expect(notice?.hidden).toBe(false);
+    expect(noticeText()).toBe("The request or response was malformed.");
     expect(shadow.innerHTML).not.toContain("<img");
     menu.host.remove();
   });

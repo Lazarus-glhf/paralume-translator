@@ -51,7 +51,14 @@ export interface SettingsHandlerDependencies {
 // provider quota. Content scripts run in every web page and must not reach
 // them; they only need get-content, open-options and their own site state.
 const EXTENSION_PAGE_COMMANDS: ReadonlySet<SettingsRequest["command"]> =
-  new Set(["get", "save", "clear-api-key", "test-connection"]);
+  new Set([
+    "get",
+    "save",
+    "clear-api-key",
+    "test-connection",
+    "list-disabled-sites",
+    "enable-site",
+  ]);
 
 export function createSettingsMessageHandler(
   repository: SettingsRepository,
@@ -173,6 +180,15 @@ export function createSettingsMessageHandler(
           await requireSitePreferences().disable(site);
           return { protocolVersion: PROTOCOL_VERSION, ok: true };
         }
+        case "list-disabled-sites":
+          return {
+            protocolVersion: PROTOCOL_VERSION,
+            ok: true,
+            sites: await requireSitePreferences().list(),
+          };
+        case "enable-site":
+          await requireSitePreferences().enable(parsed.value.site);
+          return { protocolVersion: PROTOCOL_VERSION, ok: true };
       }
     } catch (error) {
       return createErrorResponse(sanitizeError(error, "INTERNAL_ERROR"));

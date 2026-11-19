@@ -85,4 +85,31 @@ describe("site preference store", () => {
     await expect(store.disable("a.example")).resolves.toBeUndefined();
     expect(storage.values[DISABLED_SITES_STORAGE_KEY]).toEqual(["a.example"]);
   });
+
+  it("lists and restores sites through the same serialized write queue", async () => {
+    const storage = createAsyncStorage();
+    const store = createSitePreferenceStore(storage);
+    await Promise.all([store.disable("b.example"), store.disable("a.example")]);
+
+    await expect(store.list()).resolves.toEqual(["a.example", "b.example"]);
+    await Promise.all([store.enable("a.example"), store.disable("c.example")]);
+
+    await expect(store.list()).resolves.toEqual(["b.example", "c.example"]);
+    await expect(store.isDisabled("a.example")).resolves.toBe(false);
+    await expect(store.enable("missing.example")).resolves.toBeUndefined();
+  });
+
+  it("filters malformed stored entries before listing or rewriting", async () => {
+    const storage = createAsyncStorage();
+    storage.values[DISABLED_SITES_STORAGE_KEY] = [
+      "good.example",
+      "good.example",
+      "HTTPS://attacker.example/path",
+      "bad.example:443",
+      42,
+    ];
+    const store = createSitePreferenceStore(storage);
+
+    await expect(store.list()).resolves.toEqual(["good.example"]);
+  });
 });

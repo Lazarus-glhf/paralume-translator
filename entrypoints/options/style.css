@@ -204,6 +204,46 @@ button:disabled {
   font-weight: 650;
 }
 
+.disabled-sites-list {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.disabled-sites-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid #e0e0e4;
+  border-radius: 11px;
+}
+
+.disabled-sites-list span {
+  overflow-wrap: anywhere;
+}
+
+.disabled-sites-list button {
+  flex: none;
+}
+
+.error {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #f1d0cc;
+  border-radius: 11px;
+  background: #fff0ee;
+  color: #9f241b;
+}
+
+.error p {
+  margin: 0;
+  color: inherit;
+}
+
 @media (max-width: 620px) {
   .options {
     width: min(100% - 24px, 940px);
@@ -268,6 +308,16 @@ button:disabled {
     border-color: #6c5a35;
     background: #312b20;
     color: #e8d5a6;
+  }
+
+  .disabled-sites-list li {
+    border-color: #35373e;
+  }
+
+  .error {
+    border-color: #713b36;
+    background: #342321;
+    color: #ffb4ac;
   }
 }
 

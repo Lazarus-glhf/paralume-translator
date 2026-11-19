@@ -6,11 +6,10 @@ Paralume（并译）is an open-source, local-first bilingual webpage translator 
 Chrome and Edge. It keeps the original page intact and inserts each translation
 beside its source block, so you can read both languages in parallel.
 
-Release `0.1.1` improves translation retries, streaming completion, hidden-content
-filtering, nested-block extraction, progress updates, and error recovery. It also
-restricts credential access and prevents page scripts from triggering translation
-through synthetic clicks. Translation starts only after an explicit
-**Translate page** action.
+In `0.2.0`, the floating panel reports what happened after each action. You can
+stop translation, keep the paragraphs already translated, and continue later on
+the same page. You can also restore floating controls for a disabled site from
+the toolbar popup or the options page.
 
 ## Highlights
 
@@ -18,9 +17,11 @@ through synthetic clicks. Translation starts only after an explicit
 - Floating control appears automatically on ordinary HTTP and HTTPS pages.
 - Compact edge dock expands into translation, retry, visibility, clear, and site
   controls.
-- **Hide on this page** hides the dock until the page reloads.
-- **Disable on this site** persists by hostname; clicking the extension icon can
-  temporarily restore the control for the current page.
+- **Hide floating controls on this page** hides the dock until the page reloads.
+- **Disable floating controls on this site** persists by hostname. Disabled sites
+  can be restored from Popup or Options; reloading then shows the dock again.
+- Active translation can be stopped without clearing completed or failed blocks,
+  then resumed for only the remaining untranslated content.
 - OpenAI-compatible and Microsoft Translator BYOK providers.
 - Deterministic Mock provider for explicit development/testing use only; it is
   never an automatic fallback.
@@ -32,10 +33,10 @@ through synthetic clicks. Translation starts only after an explicit
 ## Install from GitHub Releases
 
 1. Open [GitHub Releases](https://github.com/Lazarus-glhf/paralume-translator/releases)
-   and select `v0.1.1`.
-2. Download `paralume-translator-0.1.1-chrome.zip` or
-   `paralume-translator-0.1.1-edge.zip`, plus
-   `paralume-translator-0.1.1-SHA256SUMS.txt`.
+   and select `v0.2.0`.
+2. Download `paralume-translator-0.2.0-chrome.zip` or
+   `paralume-translator-0.2.0-edge.zip`, plus
+   `paralume-translator-0.2.0-SHA256SUMS.txt`.
 3. Verify the ZIP digest with `sha256sum`, `shasum -a 256`, or PowerShell
    `Get-FileHash -Algorithm SHA256`.
 4. Extract the ZIP to a permanent local directory.
@@ -52,17 +53,23 @@ The floating dock is available on supported webpages without opening the toolbar
 popup. Click it to expand the control panel:
 
 - **Translate page** translates eligible, unprocessed blocks.
+- **Stop translation** cancels active page, bulk-retry, and manual-retry work while
+  preserving rendered translations and the current visibility preference.
 - **Retry all failed** retries failed translation blocks.
-- **Show / hide** changes only existing translation visibility and does not call
-  a provider.
+- **Show translations / Hide translations** explicitly reflects the current
+  visibility and does not call a provider.
 - **Clear** removes Paralume-owned translations and cancels active page work.
-- **Hide on this page** removes the dock for the current page load.
-- **Disable on this site** stores the hostname locally and suppresses automatic
-  display on future visits.
+- **Hide floating controls on this page** removes the dock for the current page
+  load without changing translations.
+- **Disable floating controls on this site** stores the hostname locally and
+  suppresses automatic display on future visits.
 
-Clicking the toolbar icon opens the popup and can temporarily restore the
-runtime on a disabled site. Browser-internal and other protected pages cannot
-run extension content scripts.
+Clicking the toolbar icon opens the popup. Translation remains available there
+for a disabled site without forcing its floating control to appear. Use
+**Restore floating controls** in Popup, or restore any disabled hostname from
+Options; reload an already-open page afterward. Storage failures are shown in
+the UI. Browser-internal and other protected pages cannot run extension content
+scripts.
 
 ## Providers and local credential security
 
@@ -108,6 +115,8 @@ scripts never receive provider credentials.
 - Runtime messages are structurally validated and use stable segment IDs.
 - Late or stale results are rejected if the source changed, detached, or belongs
   to an older operation generation.
+- Stop cancels every active page operation, rejects late results, resets pending
+  Retry controls, and keeps successful and failed translations in place.
 - Clear cancels active page operations and prevents late results from reappearing.
 
 ## Permissions

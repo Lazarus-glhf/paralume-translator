@@ -98,6 +98,12 @@ export function App({
     id: "options.loading",
   });
   const [error, setError] = useState<ErrorCode | null>(null);
+  const [disabledSites, setDisabledSites] = useState<readonly string[]>([]);
+  const [disabledSitesLoading, setDisabledSitesLoading] = useState(true);
+  const [disabledSitesError, setDisabledSitesError] =
+    useState<ErrorCode | null>(null);
+  const [restoringSite, setRestoringSite] = useState<string | null>(null);
+  const [siteStatus, setSiteStatus] = useState<MessageDescriptor | null>(null);
   const locale = resolveUiLocale(
     draft.uiLanguage,
     readBrowserUiLanguage(getBrowserUiLanguage),
@@ -122,6 +128,28 @@ export function App({
         if (active) {
           setError(sanitizeError(loadError).code);
           setBusy(false);
+        }
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [activeClient]);
+
+  useEffect(() => {
+    let active = true;
+    void activeClient.listDisabledSites().then(
+      (sites) => {
+        if (active) {
+          setDisabledSites(sites);
+          setDisabledSitesError(null);
+          setDisabledSitesLoading(false);
+        }
+      },
+      (loadError: unknown) => {
+        if (active) {
+          setDisabledSitesError(sanitizeError(loadError).code);
+          setDisabledSitesLoading(false);
         }
       },
     );
@@ -164,6 +192,23 @@ export function App({
       ...current,
       appearance: { ...current.appearance, [key]: value },
     }));
+  };
+
+  const restoreSite = async (site: string): Promise<void> => {
+    setRestoringSite(site);
+    setDisabledSitesError(null);
+    setSiteStatus(null);
+    try {
+      await activeClient.enableSite(site);
+      setDisabledSites((current) =>
+        current.filter((candidate) => candidate !== site),
+      );
+      setSiteStatus({ id: "options.siteRestored", values: { site } });
+    } catch (restoreError) {
+      setDisabledSitesError(sanitizeError(restoreError).code);
+    } finally {
+      setRestoringSite(null);
+    }
   };
 
   return (
@@ -611,6 +656,53 @@ export function App({
           >
             {formatMessage(locale, "options.resetAppearance")}
           </button>
+        </section>
+
+        <section aria-labelledby="disabled-sites-title">
+          <h2 id="disabled-sites-title">
+            {formatMessage(locale, "options.disabledSites")}
+          </h2>
+          <p>{formatMessage(locale, "options.disabledSitesDescription")}</p>
+          {disabledSitesLoading ? (
+            <p>{formatMessage(locale, "options.loading")}</p>
+          ) : disabledSites.length === 0 ? (
+            <p data-testid="disabled-sites-empty">
+              {formatMessage(locale, "options.disabledSitesEmpty")}
+            </p>
+          ) : (
+            <ul className="disabled-sites-list">
+              {disabledSites.map((site) => (
+                <li key={site}>
+                  <span>{site}</span>
+                  <button
+                    type="button"
+                    className="secondary"
+                    data-site={site}
+                    disabled={restoringSite !== null}
+                    onClick={() => void restoreSite(site)}
+                  >
+                    {formatMessage(
+                      locale,
+                      restoringSite === site
+                        ? "options.restoringSite"
+                        : "options.restoreSite",
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {siteStatus === null ? null : (
+            <p className="notice" role="status">
+              {formatDescriptor(locale, siteStatus)}
+            </p>
+          )}
+          {disabledSitesError === null ? null : (
+            <div className="error" role="alert">
+              <p>{formatMessage(locale, "options.disabledSitesError")}</p>
+              <p>{translateError(locale, disabledSitesError)}</p>
+            </div>
+          )}
         </section>
       </div>
 

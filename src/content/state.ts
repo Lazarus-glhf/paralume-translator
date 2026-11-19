@@ -21,6 +21,8 @@ export interface ContentRuntimeState {
   readonly sourceMarkers: Map<HTMLElement, SourceMarkerState>;
   readonly segmentIds: WeakMap<HTMLElement, string>;
   nextSegmentNumber: number;
+  translationsVisible: boolean;
+  working: boolean;
 }
 
 export interface ContentRuntimeStateOptions {
@@ -50,5 +52,7 @@ export function createContentRuntimeState(
     sourceMarkers: new Map(),
     segmentIds: new WeakMap(),
     nextSegmentNumber: 0,
+    translationsVisible: true,
+    working: false,
   };
 }

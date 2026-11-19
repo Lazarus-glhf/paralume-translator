@@ -5,7 +5,7 @@ import { installContentRuntime } from "../src/content/runtime";
 import { formatMessage, type UiLocale } from "../src/localization";
 import { createContentCommand } from "../src/messaging/protocol";
 import { createError } from "../src/shared/errors";
-import { captureShadowRoots } from "./helpers/dom";
+import { captureShadowRoots, trustedClick } from "./helpers/dom";
 
 vi.mock("../src/content/extractor", async (importOriginal) => {
   // Passthrough spy: real extraction, but calls are counted.
@@ -33,6 +33,75 @@ afterEach(() => {
 });
 
 describe("programmatically injected content runtime", () => {
+  it.each([true, false])(
+    "keeps the newest cross-entry action feedback after status polls and late results (menu starts: %s)",
+    async (menuStarts) => {
+      document.body.innerHTML =
+        "<p>A readable paragraph for shared command ordering.</p>";
+      const response = deferred<unknown>();
+      const listeners: ((message: unknown) => Promise<unknown>)[] = [];
+      let translating = false;
+      const roots = captureShadowRoots();
+      installContentRuntime({
+        document,
+        globalObject: {},
+        runtime: {
+          onMessage: {
+            addListener: (listener) => {
+              listeners.push(listener);
+            },
+          },
+          sendMessage: (message) => {
+            const request = message as { command: string };
+            if (request.command === "translate") {
+              translating = true;
+              return response.promise;
+            }
+            return Promise.resolve({
+              protocolVersion: 1,
+              ok: false,
+              error: createError("INTERNAL_ERROR"),
+            });
+          },
+        },
+      });
+      const shadow = roots.at(-1);
+      const listener = listeners[0];
+      if (shadow === undefined || listener === undefined)
+        throw new Error("Runtime not installed");
+      const click = (action: string) => {
+        const button = shadow.querySelector<HTMLButtonElement>(
+          `[data-action="${action}"]`,
+        );
+        if (button === null) throw new Error("Control not found");
+        trustedClick(button);
+      };
+      let pending: Promise<unknown> | undefined;
+      if (menuStarts) click("primary");
+      else pending = listener(createContentCommand("translate"));
+      await vi.waitFor(() => {
+        expect(translating).toBe(true);
+      });
+      if (menuStarts) await listener(createContentCommand("stop"));
+      else click("primary");
+      await vi.waitFor(() => {
+        expect(shadow.querySelector("[data-phase]")?.textContent).toContain(
+          "Stopped translation",
+        );
+      });
+      const stopped = shadow.querySelector("[data-phase]")?.textContent;
+      await listener(createContentCommand("status"));
+      expect(shadow.querySelector("[data-phase]")?.textContent).toBe(stopped);
+      response.resolve({ protocolVersion: 1, ok: true, results: [] });
+      await pending;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(shadow.querySelector("[data-phase]")?.textContent).toBe(stopped);
+      expect(shadow.querySelector('[data-action="primary"]')?.textContent).toBe(
+        "Translate page",
+      );
+    },
+  );
+
   it("installs one listener across repeated injection and routes translation to background", async () => {
     document.body.innerHTML = `<p>Readable paragraph for injected runtime.</p>`;
     const listeners: ((message: unknown) => Promise<unknown>)[] = [];
@@ -349,6 +418,13 @@ describe("programmatically injected content runtime", () => {
 
     expect(progressText()).toBe(
       `${String(paragraphCount)} / ${String(paragraphCount)}`,
+    );
+    expect(shadow.querySelector("[data-phase]")?.textContent).toBe(
+      `Translated ${String(paragraphCount)} readable blocks; 0 unavailable.`,
+    );
+    await listener(createContentCommand("toggle"));
+    expect(shadow.querySelector('[data-action="toggle"]')?.textContent).toBe(
+      "Show translations",
     );
     // Controller extraction + one page snapshot at start + one terminal
     // recount; independent of the ~2N progress events (was ~2N + 2).

@@ -275,7 +275,7 @@ async function getOptionsPermissionCalls(page: Page): Promise<{
 async function clickPopupAction(
   popupPage: Page,
   activePage: Page,
-  action: "translate" | "toggle" | "clear",
+  action: "translate" | "stop" | "toggle" | "clear" | "enable-site",
 ): Promise<void> {
   await activePage.bringToFront();
   await popupPage
@@ -288,11 +288,16 @@ async function clickPopupAction(
 async function runRuntimeCommand(
   popupPage: Page,
   targetTabId: number,
-  command: "translate" | "toggle" | "clear",
+  command: "translate" | "stop" | "toggle" | "clear",
 ): Promise<{
   ok: boolean;
   message?: { id: string; values?: Record<string, string | number> };
-  state?: { translationCount: number; failureCount: number; visible: boolean };
+  state?: {
+    translationCount: number;
+    failureCount: number;
+    visible: boolean;
+    working: boolean;
+  };
 }> {
   return popupPage.evaluate(
     ({ command, targetTabId }) => {
@@ -313,6 +318,7 @@ async function runRuntimeCommand(
       translationCount: number;
       failureCount: number;
       visible: boolean;
+      working: boolean;
     };
   }>;
 }
@@ -519,6 +525,133 @@ test.describe("unpacked Chromium extension", () => {
     }
 
     await articlePage.close();
+  });
+
+  test("action popup stops a partial translation and resumes only the remaining block", async () => {
+    if (context === undefined || browserCdp === undefined) {
+      throw new Error("The extension browser context was not initialized.");
+    }
+
+    const articlePage = await context.newPage();
+    await articlePage.goto(retryFixtureUrl);
+    await articlePage.evaluate(() => {
+      const main = document.querySelector("main");
+      if (main === null) throw new Error("Retry fixture main is missing.");
+      main.replaceChildren(
+        ...Array.from({ length: 41 }, (_, index) => {
+          const paragraph = document.createElement("p");
+          paragraph.id = `stop-source-${String(index)}`;
+          paragraph.textContent =
+            index === 40
+              ? "[[PARALUME_MOCK_TRANSIENT:2:SERVER_UNAVAILABLE]] Final delayed paragraph for stop and resume."
+              : `Readable stop fixture paragraph ${String(index)}.`;
+          return paragraph;
+        }),
+      );
+    });
+    await articlePage.bringToFront();
+    const actionPopup = await triggerActionPopup(
+      context,
+      browserCdp,
+      extensionId,
+      articlePage,
+    );
+    try {
+      await actionPopup.waitForStatus(
+        "Ready. Translation runs only when you request it.",
+      );
+      await actionPopup.click("translate");
+      await expect(articlePage.locator(translationSelector)).toHaveCount(40);
+      await actionPopup.click("stop");
+      await actionPopup.waitForStatus(
+        "Stopped translation and kept 40 rendered translations.",
+      );
+      await expect(articlePage.locator(translationSelector)).toHaveCount(40);
+      await expect(
+        articlePage.locator("#stop-source-40 + .paralume-translation"),
+      ).toHaveCount(0);
+
+      await actionPopup.click("translate");
+      await actionPopup.waitForStatus(
+        "Translated 1 readable blocks; 0 unavailable.",
+      );
+      await expect(articlePage.locator(translationSelector)).toHaveCount(41);
+      await expect(
+        articlePage.locator("#stop-source-40 + .paralume-translation"),
+      ).toContainText("Final delayed paragraph for stop and resume.");
+    } finally {
+      await actionPopup.close();
+      await articlePage.close();
+    }
+  });
+
+  test("disabled floating controls stay absent after reload until Popup restores the site", async () => {
+    if (context === undefined || browserCdp === undefined) {
+      throw new Error("The extension browser context was not initialized.");
+    }
+
+    const articlePage = await context.newPage();
+    try {
+      await articlePage.goto(fixtureUrl);
+      await articlePage.bringToFront();
+      await expect(articlePage.locator(floatingMenuSelector)).toHaveCount(1);
+      const menuCdp = await context.newCDPSession(articlePage);
+      await clickFloatingMenuControl(
+        articlePage,
+        menuCdp,
+        '[data-action="expand"]',
+      );
+      await clickFloatingMenuControl(
+        articlePage,
+        menuCdp,
+        '[data-action="disable-site"]',
+      );
+      await expect(articlePage.locator(floatingMenuSelector)).toHaveCount(0);
+      await menuCdp.detach();
+
+      await articlePage.reload();
+      await expect(articlePage.locator(floatingMenuSelector)).toHaveCount(0);
+      const actionPopup = await triggerActionPopup(
+        context,
+        browserCdp,
+        extensionId,
+        articlePage,
+      );
+      try {
+        await actionPopup.waitForStatus(
+          "Ready. Translation runs only when you request it.",
+        );
+        await actionPopup.click("enable-site");
+        await actionPopup.waitForStatus(
+          "Floating controls restored. Reload this page to show them again.",
+        );
+        // Restoring does not force a menu into the current page.
+        await expect(articlePage.locator(floatingMenuSelector)).toHaveCount(0);
+      } finally {
+        await actionPopup.close();
+      }
+
+      await articlePage.reload();
+      await expect(articlePage.locator(floatingMenuSelector)).toHaveCount(1);
+    } finally {
+      // Keep the serial suite isolated even if an assertion above fails.
+      await popupPage.evaluate(async () => {
+        const extensionApi = (
+          globalThis as unknown as {
+            chrome: {
+              runtime: { sendMessage(message: unknown): Promise<unknown> };
+            };
+          }
+        ).chrome;
+        await extensionApi.runtime.sendMessage({
+          protocolVersion: 1,
+          target: "settings",
+          command: "enable-site",
+          site: "127.0.0.1",
+        });
+      });
+      await articlePage.close();
+    }
   });
 
   test("lower-level content-runtime integration covers safe interleaving without exercising activeTab", async () => {
@@ -2041,6 +2174,11 @@ test.describe("unpacked Chromium extension", () => {
           }),
           clear: await send({ command: "clear-api-key", provider: "openai" }),
           test: await send({ command: "test-connection" }),
+          listSites: await send({ command: "list-disabled-sites" }),
+          enableSite: await send({
+            command: "enable-site",
+            site: "victim.example",
+          }),
           content: await send({ command: "get-content" }),
           site: await send({ command: "get-site-state" }),
         };
@@ -2072,7 +2210,14 @@ test.describe("unpacked Chromium extension", () => {
         storageReadable: boolean;
       };
 
-      for (const command of ["get", "save", "clear", "test"]) {
+      for (const command of [
+        "get",
+        "save",
+        "clear",
+        "test",
+        "listSites",
+        "enableSite",
+      ]) {
         expect(probed.responses[command]).toMatchObject({
           ok: false,
           error: { code: "INVALID_MESSAGE" },

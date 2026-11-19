@@ -29,12 +29,12 @@ const validManifest = {
 };
 
 describe("release version metadata", () => {
-  it("uses 0.1.1 for the reliability and security patch release", () => {
+  it("uses 0.2.0 for the translation controls release", () => {
     const packageJson = JSON.parse(
       readFileSync(resolve("package.json"), "utf8"),
     ) as { version?: unknown };
 
-    expect(packageJson.version).toBe("0.1.1");
+    expect(packageJson.version).toBe("0.2.0");
   });
 
   it("accepts the first public release version and Chromium-compatible numeric SemVer", () => {

@@ -148,12 +148,18 @@ function isErrorResponse(value: Record<string, unknown>): boolean {
 function isContentState(value: unknown): value is ContentState {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["translationCount", "failureCount", "visible"]) &&
+    hasOnlyKeys(value, [
+      "translationCount",
+      "failureCount",
+      "visible",
+      "working",
+    ]) &&
     Number.isInteger(value["translationCount"]) &&
     Number(value["translationCount"]) >= 0 &&
     Number.isInteger(value["failureCount"]) &&
     Number(value["failureCount"]) >= 0 &&
-    typeof value["visible"] === "boolean"
+    typeof value["visible"] === "boolean" &&
+    typeof value["working"] === "boolean"
   );
 }
 
@@ -212,7 +218,14 @@ export function parseContentCommand(
     value["protocolVersion"] !== PROTOCOL_VERSION ||
     value["target"] !== "content" ||
     !(
-      ["status", "translate", "retry-failed", "toggle", "clear"] as const
+      [
+        "status",
+        "translate",
+        "retry-failed",
+        "stop",
+        "toggle",
+        "clear",
+      ] as const
     ).includes(value["command"] as ContentCommand)
   ) {
     return invalid();

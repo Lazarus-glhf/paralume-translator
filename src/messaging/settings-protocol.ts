@@ -12,6 +12,7 @@ import {
   type PublicProviderSettings,
 } from "../settings/types";
 import { validateProviderSettingsDraft } from "../settings/validation";
+import { isValidSiteKey } from "../settings/site-preferences";
 import { PROTOCOL_VERSION, type ErrorResponse } from "./protocol";
 import { parseTranslationResponse, type ValidationResult } from "./validation";
 
@@ -68,6 +69,19 @@ export interface DisableSiteMessage {
   command: "disable-site";
 }
 
+export interface ListDisabledSitesMessage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  target: "settings";
+  command: "list-disabled-sites";
+}
+
+export interface EnableSiteMessage {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  target: "settings";
+  command: "enable-site";
+  site: string;
+}
+
 export type SettingsRequest =
   | GetSettingsMessage
   | GetContentSettingsMessage
@@ -76,7 +90,9 @@ export type SettingsRequest =
   | TestConnectionMessage
   | OpenOptionsMessage
   | GetSiteStateMessage
-  | DisableSiteMessage;
+  | DisableSiteMessage
+  | ListDisabledSitesMessage
+  | EnableSiteMessage;
 
 export interface SettingsSuccessResponse {
   protocolVersion: typeof PROTOCOL_VERSION;
@@ -105,14 +121,24 @@ export interface SiteStateSuccessResponse {
   siteDisabled: boolean;
 }
 
+export interface DisabledSitesSuccessResponse {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  ok: true;
+  sites: readonly string[];
+}
+
 export type SiteStateResponse = SiteStateSuccessResponse | ErrorResponse;
 export type DisableSiteResponse = OpenOptionsSuccessResponse | ErrorResponse;
+export type DisabledSitesResponse =
+  DisabledSitesSuccessResponse | ErrorResponse;
+export type EnableSiteResponse = OpenOptionsSuccessResponse | ErrorResponse;
 
 export type AnySettingsResponse =
   | SettingsResponse
   | ContentSettingsResponse
   | OpenOptionsSuccessResponse
-  | SiteStateSuccessResponse;
+  | SiteStateSuccessResponse
+  | DisabledSitesSuccessResponse;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -364,8 +390,18 @@ export function parseSettingsRequest(
     case "open-options":
     case "get-site-state":
     case "disable-site":
+    case "list-disabled-sites":
       return hasOnlyKeys(value, ["protocolVersion", "target", "command"])
         ? { ok: true, value: value as unknown as SettingsRequest }
+        : invalid();
+    case "enable-site":
+      return hasOnlyKeys(value, [
+        "protocolVersion",
+        "target",
+        "command",
+        "site",
+      ]) && isValidSiteKey(value["site"])
+        ? { ok: true, value: value as unknown as EnableSiteMessage }
         : invalid();
     case "clear-api-key":
       return hasOnlyKeys(value, [
@@ -515,6 +551,37 @@ export function parseDisableSiteResponse(
   return { ok: true, value: { protocolVersion: PROTOCOL_VERSION, ok: true } };
 }
 
+export function parseDisabledSitesResponse(
+  value: unknown,
+): ValidationResult<DisabledSitesResponse> {
+  const error = parseErrorResponse(value);
+  if (error !== undefined) {
+    return { ok: true, value: error };
+  }
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["protocolVersion", "ok", "sites"]) ||
+    value["protocolVersion"] !== PROTOCOL_VERSION ||
+    value["ok"] !== true ||
+    !Array.isArray(value["sites"]) ||
+    value["sites"].length > 10_000 ||
+    !value["sites"].every(isValidSiteKey) ||
+    new Set(value["sites"]).size !== value["sites"].length
+  ) {
+    return invalid();
+  }
+  return {
+    ok: true,
+    value: {
+      protocolVersion: PROTOCOL_VERSION,
+      ok: true,
+      sites: value["sites"],
+    },
+  };
+}
+
+export const parseEnableSiteResponse = parseDisableSiteResponse;
+
 export function createGetSiteStateMessage(): GetSiteStateMessage {
   return {
     protocolVersion: PROTOCOL_VERSION,
@@ -528,6 +595,23 @@ export function createDisableSiteMessage(): DisableSiteMessage {
     protocolVersion: PROTOCOL_VERSION,
     target: "settings",
     command: "disable-site",
+  };
+}
+
+export function createListDisabledSitesMessage(): ListDisabledSitesMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    target: "settings",
+    command: "list-disabled-sites",
+  };
+}
+
+export function createEnableSiteMessage(site: string): EnableSiteMessage {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    target: "settings",
+    command: "enable-site",
+    site,
   };
 }
 

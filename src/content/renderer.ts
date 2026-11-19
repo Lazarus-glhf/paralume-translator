@@ -362,6 +362,7 @@ export function setTranslationsVisible(
   state: ContentRuntimeState,
   visible: boolean,
 ): void {
+  state.translationsVisible = visible;
   for (const translation of getTranslationElements(root, state)) {
     applyVisibility(translation, visible);
   }
@@ -378,8 +379,7 @@ export function getContentState(
     failureCount: translations.filter(
       (translation) => state.translationStatuses.get(translation) === "failure",
     ).length,
-    visible:
-      translations.length === 0 ||
-      translations.every((translation) => !translation.hidden),
+    visible: state.translationsVisible,
+    working: state.working,
   };
 }

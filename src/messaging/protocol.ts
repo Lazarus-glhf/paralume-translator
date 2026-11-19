@@ -9,7 +9,7 @@ import type {
 export const PROTOCOL_VERSION = 1 as const;
 
 export type ContentCommand =
-  "status" | "translate" | "retry-failed" | "toggle" | "clear";
+  "status" | "translate" | "retry-failed" | "stop" | "toggle" | "clear";
 export type OperationId = string;
 
 export interface BackgroundTranslationMessage {

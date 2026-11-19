@@ -1,8 +1,12 @@
 import {
   createClearApiKeyMessage,
+  createEnableSiteMessage,
   createGetSettingsMessage,
+  createListDisabledSitesMessage,
   createSaveSettingsMessage,
   createTestConnectionMessage,
+  parseDisabledSitesResponse,
+  parseEnableSiteResponse,
   parseSettingsResponse,
 } from "../messaging/settings-protocol";
 import type { MessageDescriptor } from "../localization";
@@ -39,6 +43,8 @@ export interface OptionsClient {
     provider: "openai" | "microsoft",
   ) => Promise<OptionsActionResult>;
   testConnection: () => Promise<OptionsActionResult>;
+  listDisabledSites: () => Promise<readonly string[]>;
+  enableSite: (site: string) => Promise<void>;
 }
 
 function publicAsStored(settings: PublicProviderSettings): ProviderSettings {
@@ -152,6 +158,29 @@ export function createOptionsClient(
       );
       await permissionRequest;
       return send(createTestConnectionMessage());
+    },
+    async listDisabledSites() {
+      const parsed = parseDisabledSitesResponse(
+        await runtime.sendMessage(createListDisabledSitesMessage()),
+      );
+      if (!parsed.ok) {
+        throw new UserFacingError(parsed.error.code);
+      }
+      if (!parsed.value.ok) {
+        throw new UserFacingError(parsed.value.error.code);
+      }
+      return parsed.value.sites;
+    },
+    async enableSite(site) {
+      const parsed = parseEnableSiteResponse(
+        await runtime.sendMessage(createEnableSiteMessage(site)),
+      );
+      if (!parsed.ok) {
+        throw new UserFacingError(parsed.error.code);
+      }
+      if (!parsed.value.ok) {
+        throw new UserFacingError(parsed.value.error.code);
+      }
     },
   };
 }

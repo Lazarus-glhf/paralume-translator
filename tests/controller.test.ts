@@ -195,6 +195,22 @@ describe("content controller workflow", () => {
     expect(shown).toMatchObject({ ok: true, state: { visible: true } });
     expect(requestTranslations).toHaveBeenCalledOnce();
     expect(loadContentSettings).not.toHaveBeenCalled();
+
+    await controller.handleMessage(createContentCommand("toggle"));
+    await expect(
+      controller.handleMessage(createContentCommand("clear")),
+    ).resolves.toMatchObject({
+      ok: true,
+      state: { visible: true },
+    });
+    await controller.handleMessage(createContentCommand("translate"));
+    expect(
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          `[${PARALUME_TRANSLATION_FOR_ATTRIBUTE}]`,
+        ),
+      ).every((translation) => !translation.hidden),
+    ).toBe(true);
   });
 
   it("clear removes translations and markers and restores original structure", async () => {
@@ -1868,6 +1884,245 @@ describe("content controller workflow", () => {
       );
       expect(again.ok && again.message.id).toBe("content.retryFailedEmpty");
       expect(requestTranslations).toHaveBeenCalledTimes(2);
+    });
+  });
+});
+
+describe("stop and resume workflow", () => {
+  it("stops before the first result, excludes the late response, and reports stop cancellation", async () => {
+    document.body.innerHTML = `<p>Readable paragraph waiting for its first result.</p>`;
+    const pending = deferred<unknown>();
+    let request: TranslationRequest | undefined;
+    const cancelTranslation = vi.fn();
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "stop-before-first" }),
+      requestTranslations(nextRequest) {
+        request = nextRequest;
+        return pending.promise;
+      },
+      cancelTranslation,
+    });
+
+    const translating = controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    await vi.waitFor(() => {
+      expect(request).toBeDefined();
+    });
+    const stopped = await controller.handleMessage(
+      createContentCommand("stop"),
+    );
+
+    expect(stopped).toMatchObject({
+      ok: true,
+      state: { translationCount: 0, failureCount: 0, working: false },
+      message: { id: "content.stopped", values: { count: 0 } },
+    });
+    expect(cancelTranslation).toHaveBeenCalledOnce();
+    const segment = request?.segments[0];
+    if (segment === undefined) throw new Error("Translation was not captured.");
+    pending.resolve(
+      successResponse([
+        {
+          id: segment.id,
+          status: "success",
+          translatedText: "Late result must not render",
+        },
+      ]),
+    );
+    await expect(translating).resolves.toMatchObject({
+      ok: true,
+      state: { translationCount: 0, working: false },
+      message: { id: "content.cancelledByStop" },
+    });
+    expect(document.body.textContent).not.toContain(
+      "Late result must not render",
+    );
+  });
+
+  it("keeps a partial streamed result, preserves hidden preference, and resumes only remaining text", async () => {
+    document.body.innerHTML = `<p>First readable paragraph for a partial stop.</p><p>Second readable paragraph for a partial stop.</p>`;
+    const firstResponse = deferred<unknown>();
+    const requests: TranslationRequest[] = [];
+    const operationIds: string[] = [];
+    const requestTranslations = vi.fn(
+      (request: TranslationRequest, operationId: string) => {
+        requests.push(request);
+        operationIds.push(operationId);
+        if (requests.length === 1) return firstResponse.promise;
+        return Promise.resolve(
+          successResponse(
+            request.segments.map((segment) => ({
+              id: segment.id,
+              status: "success" as const,
+              translatedText: `Resumed ${segment.text}`,
+            })),
+          ),
+        );
+      },
+    );
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "partial-stop-resume" }),
+      requestTranslations,
+      cancelTranslation: vi.fn(),
+    });
+
+    const firstRun = controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    await vi.waitFor(() => {
+      expect(requests).toHaveLength(1);
+    });
+    const firstSegment = requests[0]?.segments[0];
+    const firstOperationId = operationIds[0];
+    if (firstSegment === undefined || firstOperationId === undefined) {
+      throw new Error("Initial translation was not captured.");
+    }
+    controller.handleStreamingResult(firstOperationId, {
+      id: firstSegment.id,
+      status: "success",
+      translatedText: "Kept streamed translation",
+    });
+    await controller.handleMessage(createContentCommand("toggle"));
+    const stopped = await controller.handleMessage(
+      createContentCommand("stop"),
+    );
+    expect(stopped).toMatchObject({
+      ok: true,
+      state: { translationCount: 1, visible: false, working: false },
+    });
+
+    const resumed = await controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.segments.map(({ text }) => text)).toEqual([
+      "Second readable paragraph for a partial stop.",
+    ]);
+    expect(resumed).toMatchObject({
+      ok: true,
+      state: { translationCount: 2, visible: false, working: false },
+    });
+    expect(
+      Array.from(
+        document.querySelectorAll<HTMLElement>(".paralume-translation"),
+      ).every((translation) => translation.hidden),
+    ).toBe(true);
+
+    firstResponse.resolve(
+      successResponse(
+        requests[0]?.segments.map((segment) => ({
+          id: segment.id,
+          status: "success" as const,
+          translatedText: "Obsolete whole-batch result",
+        })) ?? [],
+      ),
+    );
+    await expect(firstRun).resolves.toMatchObject({
+      ok: true,
+      message: { id: "content.cancelledByStop" },
+    });
+    expect(document.body.textContent).not.toContain(
+      "Obsolete whole-batch result",
+    );
+  });
+
+  it("stops a pending manual retry, resets Retry, and ignores its late result", async () => {
+    document.body.innerHTML = `<p>Readable paragraph with a retryable failure.</p>`;
+    const retryResponse = deferred<unknown>();
+    let call = 0;
+    const cancelTranslation = vi.fn();
+    const onProgress = vi.fn();
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "manual-retry-stop" }),
+      requestTranslations(request) {
+        call += 1;
+        const segment = request.segments[0];
+        if (segment === undefined) throw new Error("Expected one segment.");
+        if (call === 1) {
+          return Promise.resolve(
+            successResponse([
+              {
+                id: segment.id,
+                status: "failure",
+                error: createError("NETWORK_ERROR"),
+              },
+            ]),
+          );
+        }
+        if (call === 2) return retryResponse.promise;
+        return Promise.resolve(
+          successResponse([
+            {
+              id: segment.id,
+              status: "success",
+              translatedText: "Manual retry after stop succeeded",
+            },
+          ]),
+        );
+      },
+      cancelTranslation,
+      onProgress,
+    });
+
+    await controller.handleMessage(createContentCommand("translate"));
+    const retry = document.querySelector<HTMLButtonElement>(
+      `[${PARALUME_RETRY_ATTRIBUTE}]`,
+    );
+    if (retry === null) throw new Error("Retry control was not rendered.");
+    trustedClick(retry);
+    await vi.waitFor(() => {
+      expect(call).toBe(2);
+    });
+    expect(retry.disabled).toBe(true);
+    expect(onProgress).toHaveBeenCalledWith({
+      phase: "translating",
+      completed: 0,
+      total: 1,
+    });
+
+    await controller.handleMessage(createContentCommand("stop"));
+    expect(retry.disabled).toBe(false);
+    expect(retry.textContent).toBe("Retry");
+    expect(cancelTranslation).toHaveBeenCalled();
+    const marker = document
+      .querySelector<HTMLElement>("p")
+      ?.getAttribute(PARALUME_SOURCE_ID_ATTRIBUTE);
+    if (marker === undefined || marker === null) {
+      throw new Error("Segment marker is missing.");
+    }
+    retryResponse.resolve(
+      successResponse([
+        {
+          id: marker,
+          status: "success",
+          translatedText: "Late retry result must not render",
+        },
+      ]),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(document.body.textContent).not.toContain(
+      "Late retry result must not render",
+    );
+    expect(document.querySelector(`[${PARALUME_RETRY_ATTRIBUTE}]`)).toBe(retry);
+
+    trustedClick(retry);
+    await vi.waitFor(() => {
+      expect(call).toBe(3);
+    });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Manual retry after stop succeeded",
+      );
+    });
+    expect(onProgress).toHaveBeenLastCalledWith({
+      phase: "complete",
+      completed: 1,
+      total: 1,
     });
   });
 });

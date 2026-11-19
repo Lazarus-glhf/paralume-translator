@@ -23,15 +23,37 @@ export function siteKeyFromUrl(value: string | undefined): string | undefined {
   return url.hostname || undefined;
 }
 
+export function isValidSiteKey(value: unknown): value is string {
+  if (value === "file://") {
+    return true;
+  }
+  if (typeof value !== "string" || value.length === 0 || value.length > 253) {
+    return false;
+  }
+  try {
+    const parsed = new URL(`https://${value}/`);
+    return (
+      value === value.toLowerCase() &&
+      parsed.hostname.length > 0 &&
+      parsed.hostname === value.toLowerCase() &&
+      parsed.host === value.toLowerCase()
+    );
+  } catch {
+    return false;
+  }
+}
+
 function parseDisabledSites(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
+    ? Array.from(new Set(value.filter(isValidSiteKey))).sort()
     : [];
 }
 
 export interface SitePreferenceStore {
   isDisabled(site: string): Promise<boolean>;
   disable(site: string): Promise<void>;
+  list(): Promise<readonly string[]>;
+  enable(site: string): Promise<void>;
 }
 
 export function createSitePreferenceStore(
@@ -51,6 +73,7 @@ export function createSitePreferenceStore(
   let writeQueue: Promise<void> = Promise.resolve();
   return {
     async isDisabled(site) {
+      await writeQueue;
       return (await load()).includes(site);
     },
     disable(site) {
@@ -60,6 +83,23 @@ export function createSitePreferenceStore(
           return;
         }
         disabled.add(site);
+        await storage.set({
+          [DISABLED_SITES_STORAGE_KEY]: Array.from(disabled).sort(),
+        });
+      });
+      writeQueue = write.catch(() => undefined);
+      return write;
+    },
+    async list() {
+      await writeQueue;
+      return load();
+    },
+    enable(site) {
+      const write = writeQueue.then(async () => {
+        const disabled = new Set(await load());
+        if (!disabled.delete(site)) {
+          return;
+        }
         await storage.set({
           [DISABLED_SITES_STORAGE_KEY]: Array.from(disabled).sort(),
         });

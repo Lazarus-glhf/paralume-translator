@@ -6,14 +6,17 @@ import { createExtensionPageSenderCheck } from "../src/messaging/sender";
 import {
   createClearApiKeyMessage,
   createDisableSiteMessage,
+  createEnableSiteMessage,
   createGetContentSettingsMessage,
   createGetSettingsMessage,
   createGetSiteStateMessage,
+  createListDisabledSitesMessage,
   createOpenOptionsMessage,
   createSaveSettingsMessage,
   createTestConnectionMessage,
   parseContentSettingsResponse,
   parseDisableSiteResponse,
+  parseDisabledSitesResponse,
   parseSettingsRequest,
   parseSettingsResponse,
   parseSiteStateResponse,
@@ -603,6 +606,67 @@ describe("floating menu site preference messages", () => {
       ok: true,
       value: { protocolVersion: 1, ok: true },
     });
+  });
+
+  it("allows only extension pages to list and restore arbitrary disabled sites", async () => {
+    const { handler, sitePreferences } = siteHandler();
+    await sitePreferences.disable("news.example.com");
+    await sitePreferences.disable("other.example");
+
+    for (const message of [
+      createListDisabledSitesMessage(),
+      createEnableSiteMessage("other.example"),
+    ]) {
+      await expect(
+        handler(message, contentScriptSender.context),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "INVALID_MESSAGE" },
+      });
+    }
+    await expect(
+      handler(createListDisabledSitesMessage(), optionsSender.context),
+    ).resolves.toEqual({
+      protocolVersion: 1,
+      ok: true,
+      sites: ["news.example.com", "other.example"],
+    });
+    await expect(
+      handler(createEnableSiteMessage("other.example"), optionsSender.context),
+    ).resolves.toEqual({ protocolVersion: 1, ok: true });
+    await expect(sitePreferences.list()).resolves.toEqual(["news.example.com"]);
+  });
+
+  it("strictly validates list/restore requests and list responses", () => {
+    for (const site of [
+      "https://victim.example/path",
+      "victim.example:443",
+      "Victim.example",
+      "",
+    ]) {
+      expect(
+        parseSettingsRequest({
+          protocolVersion: 1,
+          target: "settings",
+          command: "enable-site",
+          site,
+        }).ok,
+      ).toBe(false);
+    }
+    expect(
+      parseDisabledSitesResponse({
+        protocolVersion: 1,
+        ok: true,
+        sites: ["good.example", "good.example"],
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseDisabledSitesResponse({
+        protocolVersion: 1,
+        ok: true,
+        sites: ["good.example"],
+      }),
+    ).toMatchObject({ ok: true, value: { sites: ["good.example"] } });
   });
 });
 

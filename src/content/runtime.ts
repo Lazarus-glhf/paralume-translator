@@ -11,6 +11,7 @@ import {
 } from "../messaging/settings-protocol";
 import {
   parseCancelTranslationResponse,
+  parseContentCommand,
   parseTranslationResultMessage,
 } from "../messaging/validation";
 import { UserFacingError } from "../shared/errors";
@@ -41,6 +42,7 @@ export interface ContentRuntimeDependencies {
   getBrowserUiLanguage?: () => string | undefined;
   siteLabel?: string;
   disableSite?: () => Promise<void>;
+  floatingMenu?: boolean;
 }
 
 interface InstalledContentRuntime {
@@ -75,6 +77,7 @@ export function installContentRuntime(
   let updateProgress: (progress: TranslationProgress) => void = () => undefined;
   let updateFailureCount: (count: number) => void = () => undefined;
   let updateLocale: (locale: UiLocale) => void = () => undefined;
+
   // Full page recount: re-extracts every candidate (computed styles, layout).
   // Only run it at phase boundaries, never once per rendered segment.
   const getPageProgress = (
@@ -165,33 +168,41 @@ export function installContentRuntime(
       : { browserUiLanguage: dependencies.getBrowserUiLanguage }),
   });
 
-  const menu = installFloatingMenu(
-    dependencies.document,
-    (command) => controller.handleMessage(createContentCommand(command)),
-    "en",
-    {
-      ...(dependencies.siteLabel === undefined
-        ? {}
-        : { siteLabel: dependencies.siteLabel }),
-      ...(dependencies.disableSite === undefined
-        ? {}
-        : { disableSite: dependencies.disableSite }),
-      async openSettings() {
-        await dependencies.runtime.sendMessage(createOpenOptionsMessage());
-      },
-    },
-  );
-  state.ownedNodes.add(menu.host);
+  const menu =
+    dependencies.floatingMenu === false
+      ? undefined
+      : installFloatingMenu(
+          dependencies.document,
+          (command) => controller.handleMessage(createContentCommand(command)),
+          "en",
+          {
+            ...(dependencies.siteLabel === undefined
+              ? {}
+              : { siteLabel: dependencies.siteLabel }),
+            ...(dependencies.disableSite === undefined
+              ? {}
+              : { disableSite: dependencies.disableSite }),
+            async openSettings() {
+              await dependencies.runtime.sendMessage(
+                createOpenOptionsMessage(),
+              );
+            },
+          },
+        );
+  if (menu !== undefined) {
+    state.ownedNodes.add(menu.host);
+  }
   updateProgress = (progress) => {
-    menu.setProgress(progress);
+    menu?.setProgress(progress);
   };
   updateFailureCount = (count) => {
-    menu.setFailureCount(count);
+    menu?.setFailureCount(count);
   };
   updateLocale = (locale) => {
-    menu.setLocale(locale);
+    menu?.setLocale(locale);
   };
-  menu.setProgress(getPageProgress("idle"));
+
+  menu?.setProgress(getPageProgress("idle"));
   void dependencies.runtime
     .sendMessage(createGetContentSettingsMessage())
     .then((rawSettings) => {
@@ -216,6 +227,16 @@ export function installContentRuntime(
         parsed.value.result,
       );
       return Promise.resolve(undefined);
+    }
+    const command = parseContentCommand(message);
+    // Share action ordering across both entry points. Polling must not erase
+    // the last action result or supersede an in-flight action's feedback.
+    if (
+      menu !== undefined &&
+      command.ok &&
+      command.value.command !== "status"
+    ) {
+      return menu.runCommand(command.value.command);
     }
     return controller.handleMessage(message);
   });

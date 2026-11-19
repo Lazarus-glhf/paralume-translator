@@ -5,7 +5,9 @@ import { join } from "node:path";
 export interface ActionPopup {
   activeTabId(): Promise<number | undefined>;
   activeTabUrl(): Promise<string | undefined>;
-  click(action: "translate" | "toggle" | "clear"): Promise<void>;
+  click(
+    action: "translate" | "stop" | "toggle" | "clear" | "enable-site",
+  ): Promise<void>;
   close(): Promise<void>;
   statusText(): Promise<string | undefined>;
   waitForStatus(expected: string): Promise<void>;
@@ -102,7 +104,9 @@ class ActionPopupTarget implements ActionPopup {
     })()`)) as number | undefined;
   }
 
-  async click(action: "translate" | "toggle" | "clear"): Promise<void> {
+  async click(
+    action: "translate" | "stop" | "toggle" | "clear" | "enable-site",
+  ): Promise<void> {
     await this.waitFor(`(() => {
       const button = document.querySelector('[data-action="${action}"]');
       return button instanceof HTMLButtonElement && !button.disabled;

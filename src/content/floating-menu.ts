@@ -1,10 +1,14 @@
-import { formatMessage, translateError, type UiLocale } from "../localization";
-import type { ContentCommand } from "../messaging/protocol";
 import {
-  isConfigurationErrorCode,
-  isErrorCode,
-  type ErrorCode,
-} from "../shared/errors";
+  formatDescriptor,
+  formatMessage,
+  translateError,
+  type MessageDescriptor,
+  type UiLocale,
+} from "../localization";
+import type { ContentCommand } from "../messaging/protocol";
+import { parseContentResponse } from "../messaging/validation";
+import { isConfigurationErrorCode, type ErrorCode } from "../shared/errors";
+import type { ContentState } from "../shared/types";
 import type { TranslationProgress } from "./controller";
 
 export interface FloatingMenu {
@@ -12,6 +16,8 @@ export interface FloatingMenu {
   setLocale(locale: UiLocale): void;
   setProgress(progress: TranslationProgress): void;
   setFailureCount(count: number): void;
+  setResponse(response: unknown): void;
+  runCommand(command: ContentCommand): Promise<unknown>;
 }
 
 export interface FloatingMenuOptions {
@@ -20,31 +26,15 @@ export interface FloatingMenuOptions {
   readonly openSettings?: () => Promise<void>;
 }
 
-// Only the validated error code is used; message text always comes from the
-// local catalog so no response-provided string reaches the page.
-function errorCodeFromResponse(response: unknown): ErrorCode | undefined {
-  if (
-    typeof response !== "object" ||
-    response === null ||
-    !("ok" in response) ||
-    response.ok !== false ||
-    !("error" in response) ||
-    typeof response.error !== "object" ||
-    response.error === null ||
-    !("code" in response.error)
-  ) {
-    return undefined;
-  }
-  return isErrorCode(response.error.code) ? response.error.code : undefined;
-}
-
 // Menu text lives in the shared localization catalog so the menu, page retry
 // UI, Popup, and Options always agree on wording and locale.
 function menuLabels(locale: UiLocale) {
   return {
     translate: formatMessage(locale, "menu.translate"),
+    stop: formatMessage(locale, "menu.stop"),
     expand: formatMessage(locale, "menu.expand"),
-    toggle: formatMessage(locale, "menu.toggle"),
+    showTranslations: formatMessage(locale, "menu.showTranslations"),
+    hideTranslations: formatMessage(locale, "menu.hideTranslations"),
     clear: formatMessage(locale, "menu.clear"),
     retryFailed: formatMessage(locale, "menu.retryFailed"),
     hidePage: formatMessage(locale, "menu.hidePage"),
@@ -131,7 +121,7 @@ export function installFloatingMenu(
         <div class="actions">
           <button class="action primary" data-action="primary" type="button">${text.translate}</button>
           <button class="action" data-action="retry-failed" type="button" disabled>${text.retryFailed}</button>
-          <button class="action" data-action="toggle" type="button">${text.toggle}</button>
+          <button class="action" data-action="toggle" type="button">${text.hideTranslations}</button>
           <button class="action" data-action="clear" type="button">${text.clear}</button>
         </div>
         <div class="site-actions" data-site-actions aria-label="${text.siteControls}">
@@ -153,6 +143,13 @@ export function installFloatingMenu(
     total: 0,
   };
   let activeErrorCode: ErrorCode | undefined;
+  let activeMessage: MessageDescriptor | undefined;
+  let activeContentState: ContentState = {
+    translationCount: 0,
+    failureCount: 0,
+    visible: true,
+    working: false,
+  };
   let commandSequence = 0;
   const renderError = (): void => {
     const notice = shadow.querySelector<HTMLElement>("[data-error]");
@@ -177,19 +174,43 @@ export function installFloatingMenu(
   };
   const setErrorCode = (code: ErrorCode | undefined): void => {
     activeErrorCode = code;
+    if (code !== undefined) {
+      activeMessage = undefined;
+    }
     renderError();
   };
-  const invoke = (command: ContentCommand): void => {
+  const applyResponse = (response: unknown): void => {
+    const parsed = parseContentResponse(response);
+    if (!parsed.ok) {
+      setErrorCode(parsed.error.code);
+      updateText();
+      return;
+    }
+    if (!parsed.value.ok) {
+      setErrorCode(parsed.value.error.code);
+      updateText();
+      return;
+    }
+    activeContentState = parsed.value.state;
+    activeMessage = parsed.value.message;
+    setErrorCode(undefined);
+    updateText();
+    updateFailureButton();
+  };
+  const invoke = (command: ContentCommand): Promise<unknown> => {
     // Only the latest command may report its outcome; a new command clears
     // the previous error immediately.
     commandSequence += 1;
     const sequence = commandSequence;
+    activeMessage = undefined;
     setErrorCode(undefined);
-    void runCommand(command).then(
+    updateText();
+    return runCommand(command).then(
       (response) => {
         if (sequence === commandSequence) {
-          setErrorCode(errorCodeFromResponse(response));
+          applyResponse(response);
         }
+        return response;
       },
       () => {
         if (sequence === commandSequence) {
@@ -217,16 +238,20 @@ export function installFloatingMenu(
     }
   });
   onTrustedClick("primary", () => {
-    invoke("translate");
+    void invoke(
+      activeContentState.working || activeProgress.phase === "translating"
+        ? "stop"
+        : "translate",
+    );
   });
   onTrustedClick("retry-failed", () => {
-    invoke("retry-failed");
+    void invoke("retry-failed");
   });
   onTrustedClick("toggle", () => {
-    invoke("toggle");
+    void invoke("toggle");
   });
   onTrustedClick("clear", () => {
-    invoke("clear");
+    void invoke("clear");
   });
   onTrustedClick("hide-page", () => {
     host.remove();
@@ -237,11 +262,15 @@ export function installFloatingMenu(
       host.remove();
       return;
     }
+    setErrorCode(undefined);
     void disableSite().then(
       () => {
         host.remove();
       },
-      () => undefined,
+      () => {
+        setErrorCode("INTERNAL_ERROR");
+        updateText();
+      },
     );
   });
   onTrustedClick("expand", () => {
@@ -262,9 +291,11 @@ export function installFloatingMenu(
     const status = shadow.querySelector<HTMLElement>("[data-phase]");
     const progress = shadow.querySelector<HTMLElement>("[data-progress]");
     const phaseText =
-      activeLabels[
-        activeProgress.phase === "idle" ? "ready" : activeProgress.phase
-      ];
+      activeMessage !== undefined && activeProgress.phase !== "translating"
+        ? formatDescriptor(activeLocale, activeMessage)
+        : activeLabels[
+            activeProgress.phase === "idle" ? "ready" : activeProgress.phase
+          ];
     if (status !== null) {
       status.textContent = phaseText;
     }
@@ -275,11 +306,11 @@ export function installFloatingMenu(
       '[data-action="primary"]',
     );
     if (primary !== null) {
-      primary.setAttribute("aria-label", activeLabels.translate);
-      const labelNode = primary.lastChild;
-      if (labelNode !== null) {
-        labelNode.textContent = activeLabels.translate;
-      }
+      const working =
+        activeContentState.working || activeProgress.phase === "translating";
+      const primaryLabel = working ? activeLabels.stop : activeLabels.translate;
+      primary.setAttribute("aria-label", primaryLabel);
+      primary.textContent = primaryLabel;
     }
     const expandButton = shadow.querySelector<HTMLButtonElement>(
       '[data-action="expand"]',
@@ -289,7 +320,9 @@ export function installFloatingMenu(
       '[data-action="toggle"]',
     );
     if (toggleButton !== null) {
-      toggleButton.textContent = activeLabels.toggle;
+      toggleButton.textContent = activeContentState.visible
+        ? activeLabels.hideTranslations
+        : activeLabels.showTranslations;
     }
     const retryFailedButton = shadow.querySelector<HTMLButtonElement>(
       '[data-action="retry-failed"]',
@@ -320,8 +353,19 @@ export function installFloatingMenu(
       ?.setAttribute("aria-label", activeLabels.siteControls);
   };
 
+  const updateFailureButton = (): void => {
+    const button = shadow.querySelector<HTMLButtonElement>(
+      '[data-action="retry-failed"]',
+    );
+    if (button !== null) {
+      button.disabled = activeContentState.failureCount === 0;
+      button.hidden = activeContentState.failureCount === 0;
+    }
+  };
+
   return {
     host,
+    runCommand: invoke,
     setLocale(nextLocale) {
       activeLocale = nextLocale;
       updateText();
@@ -329,6 +373,13 @@ export function installFloatingMenu(
     },
     setProgress(progress) {
       activeProgress = progress;
+      activeContentState = {
+        ...activeContentState,
+        working: progress.phase === "translating",
+      };
+      if (progress.phase === "translating") {
+        activeMessage = undefined;
+      }
       updateText();
       // A new operation (from any entry point) or Clear supersedes the error.
       if (progress.phase === "translating" || progress.phase === "idle") {
@@ -340,13 +391,11 @@ export function installFloatingMenu(
       );
     },
     setFailureCount(count) {
-      const button = shadow.querySelector<HTMLButtonElement>(
-        '[data-action="retry-failed"]',
-      );
-      if (button !== null) {
-        button.disabled = count === 0;
-        button.hidden = count === 0;
-      }
+      activeContentState = { ...activeContentState, failureCount: count };
+      updateFailureButton();
+    },
+    setResponse(response) {
+      applyResponse(response);
     },
   };
 }

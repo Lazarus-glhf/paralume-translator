@@ -31,4 +31,5 @@ export interface ContentState {
   translationCount: number;
   failureCount: number;
   visible: boolean;
+  working: boolean;
 }
