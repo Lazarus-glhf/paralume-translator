@@ -382,7 +382,8 @@ describe("safe translation rendering", () => {
       <article>
         <h2 id="heading" style="font-family: Georgia; font-size: 34px; font-weight: 700; line-height: 1.2; letter-spacing: 2px; text-align: center; text-transform: uppercase; color: rgb(42, 51, 66); background-color: rgb(240, 242, 248); opacity: 0.9">Readable source heading</h2>
         <p id="body" style="font-family: Arial; font-size: 15px; font-weight: 400; line-height: 1.75; text-align: start">Readable body paragraph content.</p>
-        <pre id="code" style="font-family: monospace; font-size: 13px; line-height: 1.45; tab-size: 4"><code>const readableGuidance = true;</code></pre>
+        <pre id="preformatted" style="font-family: monospace; font-size: 13px; line-height: 1.45; tab-size: 4">Preformatted readable guidance
+  keeps its line layout.</pre>
       </article>
     `;
     const state = createContentRuntimeState({ runtimeId: "source-typography" });

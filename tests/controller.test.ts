@@ -60,7 +60,9 @@ describe("content controller workflow", () => {
       <article>
         <p id="first">First readable paragraph with an <a href="https://example.com">inline link</a>.</p>
         <p id="second">Second readable paragraph for a partial failure.</p>
-        <pre><code>const untouched = true;</code></pre>
+        <pre id="notes">Preformatted release notes
+  stay readable.</pre>
+        <pre id="code"><code>const untouched = true;</code></pre>
       </article>
     `;
     const link = document.querySelector("#first a");
@@ -116,8 +118,19 @@ describe("content controller workflow", () => {
       document.querySelector("#second")?.nextElementSibling?.textContent,
     ).toContain("Retry");
     expect(
-      document.querySelector("pre")?.nextElementSibling?.textContent,
+      requestTranslations.mock.calls[0]?.[0].segments.map(({ text }) => text),
+    ).not.toContain("const untouched = true;");
+    expect(
+      document.querySelector("#notes")?.nextElementSibling?.textContent,
     ).toContain("Translation unavailable");
+    expect(
+      document.querySelector("#code")?.nextElementSibling ?? null,
+    ).toBeNull();
+    expect(
+      document
+        .querySelector("#code")
+        ?.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE),
+    ).toBe(false);
   });
 
   it("makes repeated translate and repeated injection/controller creation idempotent", async () => {
@@ -436,6 +449,80 @@ describe("content controller workflow", () => {
     expect(source.nextElementSibling?.textContent).toBe(
       "Translated: Updated readable article paragraph.",
     );
+  });
+
+  it("applies translate=no to late results and processed sources like extraction does", async () => {
+    document.body.innerHTML = `
+      <section id="region">
+        <p id="late">Paragraph protected while its request is pending.</p>
+        <p id="processed">Paragraph protected after it was translated.</p>
+      </section>
+    `;
+    const pending = deferred<unknown>();
+    const requests: TranslationRequest[] = [];
+    const respond = (request: TranslationRequest) =>
+      successResponse(
+        request.segments.map((segment) => ({
+          id: segment.id,
+          status: "success" as const,
+          translatedText: `Translated: ${segment.text}`,
+        })),
+      );
+    const controller = createContentController({
+      document,
+      state: createContentRuntimeState({ runtimeId: "translate-no-checks" }),
+      requestTranslations: (request) => {
+        requests.push(request);
+        return requests.length === 1
+          ? Promise.resolve(respond(request))
+          : pending.promise;
+      },
+    });
+    const late = document.querySelector<HTMLElement>("#late");
+    const processed = document.querySelector<HTMLElement>("#processed");
+    const region = document.querySelector<HTMLElement>("#region");
+    if (late === null || processed === null || region === null) {
+      throw new Error("translate=no fixture was not created.");
+    }
+
+    late.setAttribute("translate", "no");
+    await controller.handleMessage(createContentCommand("translate"));
+    expect(requests[0]?.segments.map(({ text }) => text)).toEqual([
+      "Paragraph protected after it was translated.",
+    ]);
+
+    // "yes" restores translation inside the protected region...
+    late.setAttribute("translate", "YES");
+    region.setAttribute("translate", "no");
+    const operation = controller.handleMessage(
+      createContentCommand("translate"),
+    );
+    await vi.waitFor(() => {
+      expect(requests).toHaveLength(2);
+    });
+    expect(requests[1]?.segments.map(({ text }) => text)).toEqual([
+      "Paragraph protected while its request is pending.",
+    ]);
+    // ...and the processed paragraph inherited "no", so its translation is
+    // dropped instead of being reported as current.
+    expect(processed.nextElementSibling).toBeNull();
+    expect(processed.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(false);
+
+    // An invalid value is ignored, so the page's "no" is inherited before
+    // the late result arrives; the result must not be rendered.
+    late.setAttribute("translate", "maybe");
+    const [lateRequest] = requests.slice(1);
+    if (lateRequest === undefined) {
+      throw new Error("The late request was not captured.");
+    }
+    pending.resolve(respond(lateRequest));
+    await expect(operation).resolves.toMatchObject({
+      ok: true,
+      state: { translationCount: 0 },
+    });
+    expect(late.nextElementSibling).toBe(processed);
+    expect(late.hasAttribute(PARALUME_SOURCE_ID_ATTRIBUTE)).toBe(false);
+    expect(document.querySelector(".paralume-translation")).toBeNull();
   });
 
   it("uses one request for the full page to minimize RPM", async () => {

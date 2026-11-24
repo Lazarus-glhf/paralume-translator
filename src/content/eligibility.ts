@@ -1,10 +1,13 @@
 import { CANDIDATE_BLOCK_SELECTOR } from "./constants";
 import type { ContentRuntimeState } from "./state";
 import {
+  CODE_ELEMENT_SELECTOR,
   getReadableText,
   hasMeaningfulText,
+  isCodeBlockElement,
   isCompoundStructuralContainer,
   isContentVisibilityHidden,
+  isTranslationEnabled,
 } from "./text";
 
 const EXCLUDED_ANCESTOR_SELECTOR = [
@@ -114,7 +117,12 @@ export function isEligibleCandidate(
     hasProcessedStructuralAncestor(element, state) ||
     isRuntimeOwned(element, state) ||
     element.closest(EXCLUDED_ANCESTOR_SELECTOR) !== null ||
-    (element.tagName !== "PRE" && element.closest("code, pre") !== null) ||
+    // Code blocks are never translated; a `pre` without code markup is
+    // preformatted prose. Blocks nested in code or `pre` belong to it.
+    (element.tagName === "PRE"
+      ? isCodeBlockElement(element)
+      : element.closest(`${CODE_ELEMENT_SELECTOR}, pre`) !== null) ||
+    !isTranslationEnabled(element) ||
     isEditable(element) ||
     isHidden(element)
   ) {

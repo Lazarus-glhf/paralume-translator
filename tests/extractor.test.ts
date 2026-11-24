@@ -98,12 +98,12 @@ describe("extractSegments", () => {
     ).toEqual(["H1", "P", "LI", "BLOCKQUOTE", "TH", "TD", "FIGCAPTION"]);
   });
 
-  it("extracts a preformatted documentation block as one text segment", () => {
+  it("extracts a plain preformatted prose block as one text segment with its line layout", () => {
     document.body.innerHTML = `
       <article>
-        <pre id="guidance"><code>For ordinary Q&amp;A, start with one broad search using short, discriminative
-keywords. If the top results contain enough support, answer from those results.</code></pre>
-        <p>Readable paragraph after the code sample.</p>
+        <pre id="guidance">For ordinary Q&amp;A, start with one broad search using short, discriminative
+    keywords. If the top results contain enough support, answer from those results.</pre>
+        <p>Readable paragraph after the preformatted guidance.</p>
       </article>
     `;
 
@@ -116,8 +116,8 @@ keywords. If the top results contain enough support, answer from those results.<
       "PRE",
       "P",
     ]);
-    expect(extracted[0]?.segment.text).toContain(
-      "For ordinary Q&A, start with one broad search",
+    expect(extracted[0]?.segment.text).toBe(
+      "For ordinary Q&A, start with one broad search using short, discriminative\nkeywords. If the top results contain enough support, answer from those results.",
     );
   });
 
@@ -585,5 +585,232 @@ describe("extractSegments content-visibility", () => {
       mixed: "Visible part of the paragraph kept inline and its ending.",
       auto: "Deferred but readable paragraph",
     });
+  });
+});
+
+describe("extractSegments code blocks and the translate attribute", () => {
+  function extractTexts(runtimeId: string): Record<string, string> {
+    return Object.fromEntries(
+      extractSegments(document, createContentRuntimeState({ runtimeId })).map(
+        ({ element, segment }) => [element.id, segment.text],
+      ),
+    );
+  }
+
+  it("skips a Shiki code block wrapped in translate=no and unmarked semantic code blocks", () => {
+    // The structure of the C# SDK page on the Claude documentation site.
+    document.body.innerHTML = `
+      <article>
+        <p id="intro">Create a client and send your first message from C#:</p>
+        <div class="code-block" translate="no"><pre id="shiki" class="shiki github-light" tabindex="0"><code><span class="line"><span style="color:#D73A49">using</span><span> Anthropic;</span></span>
+<span class="line"><span style="color:#D73A49">var</span><span> client = </span><span style="color:#D73A49">new</span><span> AnthropicClient();</span></span>
+<span class="line"><span>// Sends one message to the selected Claude model</span></span></code></pre></div>
+        <pre id="unmarked"><code>var message = await client.Messages.Create(parameters);</code></pre>
+        <pre id="sample-output"><samp>Message created with the requested parameters</samp></pre>
+        <code id="block-code" style="display: block">Console.WriteLine(message.Content);</code>
+        <p id="outro">The response contains the generated assistant message.</p>
+      </article>
+    `;
+    const shiki = document.querySelector("#shiki > code > span");
+
+    expect(
+      shiki?.closest('[translate="no"] > pre.shiki > code'),
+    ).not.toBeNull();
+    expect(extractTexts("shiki")).toEqual({
+      intro: "Create a client and send your first message from C#:",
+      outro: "The response contains the generated assistant message.",
+    });
+  });
+
+  it("does not merge short commands into list items or table cells", () => {
+    document.body.innerHTML = `
+      <ol>
+        <li id="pre-step">Run the restore command in the project directory <pre><code>dotnet restore</code></pre></li>
+        <li id="shiki-step">Install the SDK package for your project <div translate="no"><pre class="shiki"><code><span class="line"><span>dotnet add package Anthropic</span></span></code></pre></div></li>
+        <li id="paragraph-step"><p>Build the release artifacts locally</p><p><code>make</code></p></li>
+        <li><pre><code>dotnet run --project Samples</code></pre></li>
+      </ol>
+      <table><tbody>
+        <tr><td><code>max_tokens</code></td><td id="description">The maximum number of tokens to generate</td></tr>
+        <tr><td id="command-cell">Restores package dependencies <div><code>dotnet restore</code></div></td><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td></tr>
+      </tbody></table>
+    `;
+
+    const extracted = extractSegments(
+      document,
+      createContentRuntimeState({ runtimeId: "short-commands" }),
+    );
+
+    expect(
+      Object.fromEntries(
+        extracted.map(({ element, segment }) => [element.id, segment.text]),
+      ),
+    ).toEqual({
+      "pre-step": "Run the restore command in the project directory",
+      "shiki-step": "Install the SDK package for your project",
+      "paragraph-step": "Build the release artifacts locally",
+      description: "The maximum number of tokens to generate",
+      "command-cell": "Restores package dependencies",
+    });
+    expect(
+      extracted.some(
+        ({ segment }) =>
+          segment.text.includes("dotnet") || segment.text.includes("make"),
+      ),
+    ).toBe(false);
+  });
+
+  it("translates a pre that mixes prose with inline code markup", () => {
+    document.body.innerHTML = `
+      <pre id="mixed-pre">Press <kbd>Enter</kbd> to continue reading.</pre>
+      <pre id="code-pre"><code>npm ci</code>
+</pre>
+    `;
+
+    expect(extractTexts("mixed-pre")).toEqual({
+      "mixed-pre": "Press Enter to continue reading.",
+    });
+  });
+
+  it("keeps a block boundary where a skipped code block was removed", () => {
+    document.body.innerHTML = `
+      <ul><li id="install">Install dependencies<pre><code>npm ci</code></pre>before building.</li></ul>
+    `;
+
+    expect(extractTexts("code-boundary")).toEqual({
+      install: "Install dependencies before building.",
+    });
+  });
+
+  it("adds no gap where unrendered or extension-owned nodes were skipped", () => {
+    document.body.innerHTML = `
+      <ul>
+        <li id="hidden-attr">micro<div hidden>hidden</div>scope is ready</li>
+        <li id="display-none">micro<div style="display: none">hidden</div>scope is ready</li>
+        <li id="aria-hidden">micro<div aria-hidden="true">hidden</div>scope is ready</li>
+        <li id="hidden-code">micro<pre hidden><code>npm ci</code></pre>scope is ready</li>
+        <li id="none-code">micro<code style="display: none">npm ci</code>scope is ready</li>
+        <li id="owned">micro<div id="owned-node">Paralume UI</div>scope is ready</li>
+      </ul>
+    `;
+    const state = createContentRuntimeState({ runtimeId: "skipped-gaps" });
+    const owned = document.querySelector("#owned-node");
+    if (owned === null) {
+      throw new Error("Owned node fixture was not created.");
+    }
+    state.ownedNodes.add(owned);
+
+    const texts = Object.fromEntries(
+      extractSegments(document, state).map(({ element, segment }) => [
+        element.id,
+        segment.text,
+      ]),
+    );
+    expect(texts).toEqual({
+      "hidden-attr": "microscope is ready",
+      "display-none": "microscope is ready",
+      "aria-hidden": "microscope is ready",
+      "hidden-code": "microscope is ready",
+      "none-code": "microscope is ready",
+      owned: "microscope is ready",
+    });
+    for (const id of Object.keys(texts)) {
+      const element = document.getElementById(id);
+      if (element === null) {
+        throw new Error(`Missing fixture ${id}.`);
+      }
+      expect(getCurrentSourceText(element, state)).toBe("microscope is ready");
+    }
+  });
+
+  it("keeps inline code and inline translate=no runs inside prose as context", () => {
+    document.body.innerHTML = `
+      <p id="inline">Call <code>client.Messages.Create</code> and press <kbd>Enter</kbd> to send it.</p>
+      <ul><li id="inline-item">Set <code>ANTHROPIC_API_KEY</code> before running the sample</li></ul>
+      <p id="brand">Paralume works with <span translate="no">Claude</span> models today.</p>
+      <p id="identifier-only"><span translate="no">claude-opus-model-identifier</span></p>
+      <p id="code-only"><code>client.Messages.Create(parameters)</code></p>
+    `;
+
+    expect(extractTexts("inline-code")).toEqual({
+      inline: "Call client.Messages.Create and press Enter to send it.",
+      "inline-item": "Set ANTHROPIC_API_KEY before running the sample",
+      brand: "Paralume works with Claude models today.",
+    });
+  });
+
+  it("inherits the nearest valid translate value and lets yes restore translation", () => {
+    document.body.innerHTML = `
+      <div translate="no">
+        <p id="inherited-no">Inherited no-translate paragraph</p>
+        <p id="invalid-value" translate="maybe">Invalid value keeps the inherited state</p>
+        <p id="padded-value" translate=" yes ">Padded value is invalid and inherits no</p>
+        <section translate=""><p id="empty-yes">Empty translate value restores translation</p></section>
+        <p id="restored" translate="YES">Uppercase yes restores this paragraph <span translate="no">ProductName</span> too</p>
+        <blockquote id="protected-quote">Protected quote text <p id="quote-restored" translate="yes">Restored paragraph inside the quote</p></blockquote>
+      </div>
+      <p id="top-invalid" translate="nope">Invalid value at the top keeps the default</p>
+      <p id="explicit-no" translate="No">Explicitly protected paragraph text</p>
+      <ul>
+        <li id="protected-block-item">List item prose stays translatable <div translate="no"><p>Protected nested paragraph text</p></div></li>
+        <li id="restored-run-item">Intro sentence for the item <div translate="no">protected words <span translate="yes">and restored words</span></div></li>
+      </ul>
+    `;
+
+    expect(extractTexts("translate-attribute")).toEqual({
+      "empty-yes": "Empty translate value restores translation",
+      restored: "Uppercase yes restores this paragraph ProductName too",
+      "quote-restored": "Restored paragraph inside the quote",
+      "top-invalid": "Invalid value at the top keeps the default",
+      "protected-block-item": "List item prose stays translatable",
+      "restored-run-item": "Intro sentence for the item and restored words",
+    });
+  });
+
+  it("applies the same translate and code rules to source checks", () => {
+    document.body.innerHTML = `
+      <p id="paragraph">Paragraph the page protects later <span id="name" translate="no">Paralume</span> today</p>
+      <ul><li id="item">List item explaining the command below <div id="command"><code>dotnet restore</code></div></li></ul>
+    `;
+    const state = createContentRuntimeState({ runtimeId: "source-checks" });
+    const first = extractSegments(document, state);
+    for (const extracted of first) {
+      expect(getCurrentSourceText(extracted.element, state)).toBe(
+        extracted.segment.text,
+      );
+      renderTranslation(extracted, success(extracted.segment), state);
+    }
+    expect(first.map(({ element }) => element.id)).toEqual([
+      "paragraph",
+      "item",
+    ]);
+    expect(extractSegments(document, state)).toEqual([]);
+
+    // Neither restoring the inline run nor protecting the command block
+    // changes what is read, so both translations stay current.
+    document.querySelector("#name")?.setAttribute("translate", "yes");
+    document.querySelector("#command")?.setAttribute("translate", "no");
+    expect(extractSegments(document, state)).toEqual([]);
+
+    const paragraph = document.querySelector<HTMLElement>("#paragraph");
+    if (paragraph === null) {
+      throw new Error("Source check fixture was not created.");
+    }
+    // A restored run stays readable inside a protected block.
+    paragraph.setAttribute("translate", "no");
+    expect(getCurrentSourceText(paragraph, state)).toBe("Paralume");
+    document.querySelector("#name")?.removeAttribute("translate");
+    expect(getCurrentSourceText(paragraph, state)).toBe("");
+    expect(extractSegments(document, state)).toEqual([]);
+    expect(state.sourceMarkers.has(paragraph)).toBe(false);
+    expect(paragraph.nextElementSibling?.tagName).toBe("UL");
+    expect(document.body.textContent).not.toContain(
+      "Translated Paragraph the page protects later",
+    );
+
+    paragraph.setAttribute("translate", "yes");
+    expect(
+      extractSegments(document, state).map(({ segment }) => segment.text),
+    ).toEqual(["Paragraph the page protects later Paralume today"]);
   });
 });

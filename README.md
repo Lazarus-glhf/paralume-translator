@@ -6,10 +6,12 @@ Paralume（并译）is an open-source, local-first bilingual webpage translator 
 Chrome and Edge. It keeps the original page intact and inserts each translation
 beside its source block, so you can read both languages in parallel.
 
-In `0.2.0`, the floating panel reports what happened after each action. You can
-stop translation, keep the paragraphs already translated, and continue later on
-the same page. You can also restore floating controls for a disabled site from
-the toolbar popup or the options page.
+`0.2.1` stops translating standalone code blocks on documentation pages. Code
+blocks such as `pre > code` (including Shiki-highlighted blocks) are skipped
+whether or not the page marks them `translate="no"`. Short commands are no longer
+merged into the surrounding list item or table cell. Inline code inside sentences,
+plain `pre` text, and the explanations around code are still translated. The
+stop, resume, and site restore controls from `0.2.0` are unchanged.
 
 ## Highlights
 
@@ -33,10 +35,10 @@ the toolbar popup or the options page.
 ## Install from GitHub Releases
 
 1. Open [GitHub Releases](https://github.com/Lazarus-glhf/paralume-translator/releases)
-   and select `v0.2.0`.
-2. Download `paralume-translator-0.2.0-chrome.zip` or
-   `paralume-translator-0.2.0-edge.zip`, plus
-   `paralume-translator-0.2.0-SHA256SUMS.txt`.
+   and select `v0.2.1`.
+2. Download `paralume-translator-0.2.1-chrome.zip` or
+   `paralume-translator-0.2.1-edge.zip`, plus
+   `paralume-translator-0.2.1-SHA256SUMS.txt`.
 3. Verify the ZIP digest with `sha256sum`, `shasum -a 256`, or PowerShell
    `Get-FileHash -Algorithm SHA256`.
 4. Extract the ZIP to a permanent local directory.
@@ -112,6 +114,19 @@ scripts never receive provider credentials.
 - Provider output is inserted as inert `textContent`, never executable HTML.
 - Code, forms, editable regions, navigation/footer, hidden content, and
   extension-owned nodes are excluded.
+- Code blocks (`pre` whose text is all `code`, `samp`, or `kbd` markup, or
+  block-level code elements) are never translated. A `pre` that mixes prose with
+  inline code, such as `Press <kbd>Enter</kbd> to continue`, is translated. A
+  nested block that holds only code is not merged into its list item or table
+  cell, and text before and after a removed code block stays separated. Inline
+  code inside prose is kept as context.
+- The HTML `translate` attribute is honored. The nearest valid value applies,
+  invalid values are inherited from the parent, and `translate="yes"` restores
+  translation inside a `translate="no"` region. Inline `translate="no"` words
+  such as product names stay in their sentence as context, but a block that
+  contains only such text is not translated. When the page changes a source to
+  `translate="no"`, late results for it are dropped and its translation is
+  removed on the next Translate action.
 - Runtime messages are structurally validated and use stable segment IDs.
 - Late or stale results are rejected if the source changed, detached, or belongs
   to an older operation generation.
@@ -195,6 +210,8 @@ public/icon/              Production extension icons
 - API keys are local BYOK values, not encrypted vault entries.
 - Dynamic DOM additions are processed on the next Translate action, not observed
   continuously.
+- Code shown in a plain `pre` without `code`, `samp`, or `kbd` markup and without
+  `translate="no"` is indistinguishable from preformatted prose and is translated.
 - Protected browser pages, PDF, video/subtitles, OCR, accounts, cloud sync,
   payments, and Firefox are out of scope.
 - Store submission is not automated; GitHub Releases provide unpacked ZIPs.

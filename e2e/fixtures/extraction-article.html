@@ -49,6 +49,30 @@
           </tr>
         </tbody>
       </table>
+
+      <section id="sdk-docs">
+        <p id="sdk-intro">Create a client and send your first message from C#:</p>
+        <div id="sdk-shiki-wrapper" class="code-block" translate="no"><pre id="sdk-shiki" class="shiki github-light" tabindex="0"><code><span class="line"><span style="color: #d73a49">using</span><span> Anthropic;</span></span>
+<span class="line"><span style="color: #d73a49">var</span><span> client = new AnthropicClient();</span></span>
+<span class="line"><span>// SHIKI_CODE_SECRET sends one message</span></span></code></pre></div>
+        <pre id="sdk-unmarked"><code>var message = await client.Messages.Create(UNMARKED_CODE_SECRET);</code></pre>
+        <p id="sdk-inline">Call <code>client.Messages.Create</code> with your request parameters.</p>
+        <ol>
+          <li id="sdk-install-step">Install the SDK package for your project <div translate="no"><pre class="shiki"><code><span class="line"><span>dotnet add package Anthropic</span></span></code></pre></div></li>
+          <li id="sdk-restore-step">Run the restore command in the project directory <pre><code>npm ci</code></pre></li>
+        </ol>
+        <table>
+          <tbody>
+            <tr><td><code>max_tokens</code></td><td id="sdk-param-description">The maximum number of tokens to generate</td></tr>
+          </tbody>
+        </table>
+        <div translate="no">
+          <p id="sdk-protected">PROTECTED_PARAGRAPH_SECRET stays in the source language</p>
+          <p id="sdk-restored" translate="yes">Restored paragraph inside a protected region</p>
+        </div>
+        <pre id="plain-pre">Plain preformatted notes keep
+    their original line layout</pre>
+      </section>
     </main>
   </body>
 </html>

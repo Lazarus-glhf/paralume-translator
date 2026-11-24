@@ -5,9 +5,10 @@
 Paralume（并译）是一款面向 Chrome 和 Edge 的开源、本地优先双语网页翻译扩展。
 它保留原始网页，并把译文插入对应原文旁边，让两种语言在同一页面并行阅读。
 
-`0.2.0` 的悬浮面板会显示操作结果。阅读长文时，可以中途停止翻译，保留已有
-译文，稍后在同一页面继续翻译剩余段落。停用某个网站的悬浮控件后，也可以从
-工具栏弹窗或选项页恢复。
+`0.2.1` 修复了文档网页中独立代码块被误翻的问题。`pre > code` 等代码块（包括
+Shiki 高亮代码块）无论网页是否标记 `translate="no"`，都会被跳过；短命令也不会
+再并入所在的列表项或表格单元格。句子中的行内代码、普通 `pre` 文本以及代码周围
+的说明仍会翻译。`0.2.0` 的停止、继续及网站恢复功能保持不变。
 
 ## 主要功能
 
@@ -27,10 +28,10 @@ Paralume（并译）是一款面向 Chrome 和 Edge 的开源、本地优先双�
 ## 从 GitHub Releases 安装
 
 1. 打开 [GitHub Releases](https://github.com/Lazarus-glhf/paralume-translator/releases)，
-   选择 `v0.2.0`。
-2. 下载 `paralume-translator-0.2.0-chrome.zip` 或
-   `paralume-translator-0.2.0-edge.zip`，同时下载
-   `paralume-translator-0.2.0-SHA256SUMS.txt`。
+   选择 `v0.2.1`。
+2. 下载 `paralume-translator-0.2.1-chrome.zip` 或
+   `paralume-translator-0.2.1-edge.zip`，同时下载
+   `paralume-translator-0.2.1-SHA256SUMS.txt`。
 3. 使用 `sha256sum`、`shasum -a 256` 或 PowerShell
    `Get-FileHash -Algorithm SHA256` 验证 ZIP 校验值。
 4. 将 ZIP 解压到固定的本地目录。
@@ -89,6 +90,15 @@ API 密钥存储于当前浏览器配置文件的 `chrome.storage.local`。该�
 - 保留原始节点、链接、事件监听器、列表编号、表格结构和框架所有权。
 - 服务输出通过惰性的 `textContent` 插入，绝不会作为 HTML 执行。
 - 排除代码、表单、可编辑区域、导航/页脚、隐藏内容及扩展自有节点。
+- 代码块（文本全部位于 `code`、`samp` 或 `kbd` 标记中的 `pre`，以及块级代码
+  元素）一律不翻译；正文与行内代码混排的 `pre`（如 `Press <kbd>Enter</kbd> to
+continue`）仍会翻译。只含代码的嵌套块不会并入所在的列表项或表格单元格，移除
+  代码块后其前后文本仍保持分隔；正文中的行内代码作为上下文保留。
+- 遵循 HTML `translate` 属性：以最近的有效值为准，无效值继承父元素状态，
+  `translate="yes"` 可在 `translate="no"` 区域内恢复翻译。行内
+  `translate="no"` 文字（如产品名）作为上下文保留在句子中，但只含此类文字的块
+  不会翻译。网页把来源改为 `translate="no"` 后，迟到结果会被丢弃，已有译文会在
+  下一次“翻译页面”时移除。
 - 跨上下文消息经过结构校验，并使用稳定文本段 ID。
 - 如果来源已修改、脱离文档或属于旧任务代次，迟到结果会被拒绝。
 - “停止”会取消所有页面活动任务、拒绝迟到结果、重置等待中的重试控件，并保留
@@ -162,6 +172,8 @@ public/icon/              正式扩展图标
 - 源语言自动检测，目标语言固定为简体中文。
 - API 密钥是本地 BYOK 值，不是加密保险库条目。
 - 动态新增的 DOM 会在下一次“翻译页面”操作中处理，不会持续观察。
+- 若代码只放在普通 `pre` 中，既没有 `code`、`samp` 或 `kbd` 标记，也没有
+  `translate="no"`，则无法与预格式化正文区分，仍会被翻译。
 - 浏览器受保护页面、PDF、视频/字幕、OCR、账户、云同步、支付和 Firefox 不在范围内。
 - 未自动发布到扩展商店；GitHub Releases 提供未打包 ZIP。
 

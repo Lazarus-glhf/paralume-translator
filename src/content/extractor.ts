@@ -73,7 +73,8 @@ export function extractSegments(
     root.querySelectorAll(CANDIDATE_BLOCK_SELECTOR),
   ).filter((element) => isEligibleCandidate(element, state));
   // Merged list items/cells own their nested blocks. Compound ones (nested
-  // lists/tables, code blocks, or several readable blocks) let nested blocks
+  // lists/tables, preformatted prose, or several readable blocks; never code
+  // blocks or `translate="no"` blocks, which are skipped) let nested blocks
   // stand alone and keep only their loose text, so layout tables and nested
   // lists do not collapse into one oversized segment.
   const structuralCandidates = new Set(

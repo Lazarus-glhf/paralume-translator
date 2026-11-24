@@ -29,7 +29,8 @@
         line-height: 1.8;
       }
 
-      #preformatted-code {
+      #preformatted-code,
+      #preformatted-notes {
         font-family: monospace;
         font-size: 13px;
         line-height: 1.45;
@@ -109,6 +110,10 @@
           Translation should follow this quoted passage immediately.
         </blockquote>
 
+        <pre id="preformatted-notes" data-expect-translation>
+Plain preformatted notes keep their
+    original line layout in the translation.</pre>
+
         <figure>
           <div role="img" aria-label="Abstract fixture illustration">◇</div>
           <figcaption id="figure-caption" data-expect-translation>
@@ -153,7 +158,7 @@
           >
           <pre
             id="preformatted-code"
-            data-expect-translation
+            data-expect-excluded
           ><code>function keepSourceCode() {
   return "unchanged";
 }</code></pre>

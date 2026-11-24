@@ -767,7 +767,7 @@ test.describe("unpacked Chromium extension", () => {
       "end to end.\n\nSuccess means:\n- make the eligibility decision",
     );
     const typographyPairs = await articlePage.evaluate(() =>
-      ["article-title", "linked-paragraph", "preformatted-code"].map((id) => {
+      ["article-title", "linked-paragraph", "preformatted-notes"].map((id) => {
         const source = document.getElementById(id);
         const translation = source?.nextElementSibling;
         if (
@@ -920,9 +920,14 @@ test.describe("unpacked Chromium extension", () => {
         element.textContent.replace(/\s+/g, " ").trim(),
       ),
     );
-    const allTranslationText = await articlePage
-      .locator(translationSelector)
-      .allTextContents();
+    const allTranslationText = (
+      await articlePage.locator(translationSelector).allTextContents()
+    )
+      .join("\n")
+      .replace(/\s+/g, " ");
+    expect(excludedText).toContain(
+      'function keepSourceCode() { return "unchanged"; }',
+    );
     for (const text of excludedText) {
       expect(allTranslationText).not.toContain(text);
     }
@@ -1033,7 +1038,7 @@ test.describe("unpacked Chromium extension", () => {
     await articlePage.close();
   });
 
-  test("Chromium extraction skips hidden/excluded descendants and splits nested lists and layout tables", async () => {
+  test("Chromium extraction skips hidden/excluded descendants, code blocks, and translate=no content, and splits nested lists and layout tables", async () => {
     if (context === undefined) {
       throw new Error("The extension browser context was not initialized.");
     }
@@ -1081,8 +1086,50 @@ test.describe("unpacked Chromium extension", () => {
       "short-nested-item": "Step one opens the settings page Done.",
       "loose-quote": "Quote introduction loose text",
       "loose-quoted": "Quoted paragraph text here",
+      "sdk-intro": "Create a client and send your first message from C#:",
+      "sdk-inline": "Call client.Messages.Create with your request parameters.",
+      "sdk-install-step": "Install the SDK package for your project",
+      "sdk-restore-step": "Run the restore command in the project directory",
+      "sdk-param-description": "The maximum number of tokens to generate",
+      "sdk-restored": "Restored paragraph inside a protected region",
+      "plain-pre": "Plain preformatted notes keep\ntheir original line layout",
     };
     const expectedCount = Object.keys(expectedTexts).length;
+
+    // Ground truth from Chromium: the fixture really has the documentation
+    // site's code block structure, and HTMLElement.translate agrees with the
+    // inherited/restored translate states Paralume must honor.
+    await expect(
+      extractionPage.evaluate(() => {
+        const shiki = document.getElementById("sdk-shiki");
+        const translateOf = (id: string) =>
+          document.getElementById(id)?.translate ?? null;
+        return {
+          shikiStructure:
+            shiki?.matches('div[translate="no"] > pre.shiki') === true &&
+            shiki.querySelector(":scope > code > span.line > span") !== null,
+          unmarkedStructure:
+            document.querySelector("#sdk-unmarked > code") !== null,
+          translate: {
+            "sdk-shiki": translateOf("sdk-shiki"),
+            "sdk-unmarked": translateOf("sdk-unmarked"),
+            "sdk-protected": translateOf("sdk-protected"),
+            "sdk-restored": translateOf("sdk-restored"),
+            "plain-pre": translateOf("plain-pre"),
+          },
+        };
+      }),
+    ).resolves.toEqual({
+      shikiStructure: true,
+      unmarkedStructure: true,
+      translate: {
+        "sdk-shiki": false,
+        "sdk-unmarked": true,
+        "sdk-protected": false,
+        "sdk-restored": true,
+        "plain-pre": true,
+      },
+    });
 
     // Ground truth from Chromium: checkVisibility() reports content skipped
     // by content-visibility: hidden as not visible.
@@ -1166,9 +1213,65 @@ test.describe("unpacked Chromium extension", () => {
       "CV_ANCESTOR_SECRET",
       "CV_SELF_SECRET",
       "CV_DESCENDANT_SECRET",
+      "SHIKI_CODE_SECRET",
+      "AnthropicClient",
+      "UNMARKED_CODE_SECRET",
+      "dotnet add package",
+      "npm ci",
+      "max_tokens",
+      "PROTECTED_PARAGRAPH_SECRET",
     ]) {
       expect(allTranslationText).not.toContain(secret);
     }
+    // Code blocks (marked translate="no" or not) and protected blocks get no
+    // source marker and no adjacent translation; plain pre keeps its layout.
+    await expect(
+      extractionPage.evaluate(() =>
+        [
+          "#sdk-shiki-wrapper",
+          "#sdk-shiki",
+          "#sdk-unmarked",
+          "#sdk-install-step pre",
+          "#sdk-restore-step pre",
+          "#sdk-docs td:first-child",
+          "#sdk-protected",
+        ].map((selector) => {
+          const element = document.querySelector(selector);
+          return {
+            selector,
+            marked:
+              element === null ||
+              element.hasAttribute("data-paralume-source-id") ||
+              element.querySelector("[data-paralume-source-id]") !== null,
+            // A translated list item appends its own translation after
+            // nested content; only a translation for this element counts.
+            followedByTranslation:
+              element?.nextElementSibling?.getAttribute(
+                "data-paralume-owned",
+              ) === "true" &&
+              element.parentElement?.hasAttribute("data-paralume-source-id") !==
+                true,
+          };
+        }),
+      ),
+    ).resolves.toEqual(
+      [
+        "#sdk-shiki-wrapper",
+        "#sdk-shiki",
+        "#sdk-unmarked",
+        "#sdk-install-step pre",
+        "#sdk-restore-step pre",
+        "#sdk-docs td:first-child",
+        "#sdk-protected",
+      ].map((selector) => ({
+        selector,
+        marked: false,
+        followedByTranslation: false,
+      })),
+    );
+    await expect(
+      extractionPage.locator(`#plain-pre + ${translationSelector}`),
+    ).toHaveCSS("white-space", "pre-wrap");
 
     // Translations rendered inside compound list items/cells must not make
     // their source look changed, so a repeat request stays idempotent.
